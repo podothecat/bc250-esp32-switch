@@ -20,8 +20,10 @@
 //   * If the board shuts itself down (e.g. OS shutdown), TPMS1 drops to 0 while
 //     the PSU is still energized. We detect that and release PS_ON# so the PSU
 //     follows the board down.
-//   * A background BLE scan watches for the 8BitDo controller advertising; when
+//   * A background BLE scan watches for the bound controller advertising; when
 //     it appears while we're OFF, that wakes the machine just like a button tap.
+//     After a power-off the wake stays disarmed until the controller has gone
+//     quiet, so its reconnect burst can't switch the machine straight back on.
 
 enum PowerState {
   STATE_OFF,      // PSU released, board down
@@ -51,6 +53,12 @@ static unsigned long boardSenseChange  = 0;
 static volatile bool          bleSeenEver = false;
 static volatile unsigned long bleLastSeen = 0;
 static unsigned long          bleInhibitUntil = 0;  // wakes ignored until this
+
+// Arm/disarm latch (see BLE_REARM_SILENCE_MS). Starts armed so an ESP reset
+// while OFF keeps the old "controller on -> machine on" behaviour.
+static bool          bleWakeArmed   = true;
+static unsigned long bleDisarmedAt  = 0;
+static bool          blePresentLast = false;  // for seen/lost edge logging
 
 // --- Misc timers ---
 static unsigned long bootStart    = 0;
@@ -123,13 +131,16 @@ static void powerOn(const char *reason, unsigned long now) {
   setState(STATE_BOOTING);
 }
 
-// Shared power-off path. Starts the BLE-wake cooldown so the controller's
-// post-shutdown reconnect burst can't immediately wake us again. Takes `now` for
-// the same single-clock-per-loop reason as powerOn().
+// Shared power-off path. Starts the BLE-wake cooldown and disarms the wake latch
+// so the controller's post-shutdown reconnect burst can't wake us again. Takes
+// `now` for the same single-clock-per-loop reason as powerOn().
 static void powerOff(const char *reason, unsigned long now) {
   Serial.printf("[ACT ] %s -> powering off\n", reason);
   psuOff();
   bleInhibitUntil = now + BLE_WAKE_COOLDOWN_MS;
+  bleWakeArmed = false;
+  bleDisarmedAt = now;
+  Serial.println("[BLE ] wake disarmed until controller goes quiet");
   setState(STATE_OFF);
 }
 
@@ -387,14 +398,38 @@ static void normalLoop() {
   }
 
   // --- BLE controller wake ("machine follows controller") ---
-  // While OFF, the controller being present powers the machine on. The guard
-  // window after a power-off lets you switch the controller off first (so it
-  // goes absent and the machine stays down) and rides out the controller's
-  // reconnect-advertising burst at shutdown.
+  // While OFF and armed, the controller being present powers the machine on.
+  // A power-off disarms the wake; it re-arms only after the controller has been
+  // silent for BLE_REARM_SILENCE_MS, so its reconnect-advertising burst at
+  // shutdown can't wake us however long it lasts. The fixed cooldown still
+  // applies on top.
+  //
+  // bleLastSeen is written by the scan task and can land after `now` was taken.
+  // The unsigned difference then underflows to a huge "silence", which is
+  // harmless for presence (one loop of "absent") but would falsely re-arm the
+  // latch — so the silence is computed signed.
+  unsigned long seen = bleLastSeen;
+  int32_t bleSilentMs = (int32_t)(now - seen);
   bool blePresent =
-      bleSeenEver && (now - bleLastSeen) < BLE_PRESENCE_TIMEOUT_MS;
+      bleSeenEver && bleSilentMs < (int32_t)BLE_PRESENCE_TIMEOUT_MS;
   bool bleInhibited = (int32_t)(bleInhibitUntil - now) > 0;
-  if (state == STATE_OFF && blePresent && !bleInhibited) {
+
+  if (blePresent != blePresentLast) {
+    blePresentLast = blePresent;
+    Serial.printf("[BLE ] controller %s\n", blePresent ? "seen" : "lost");
+  }
+
+  // Silence is measured from the power-off too, not just the last sighting: with
+  // BLE_SCAN_ONLY_WHEN_OFF the scan was paused while ON, so a stale bleLastSeen
+  // would otherwise re-arm before the scan has heard the reconnect burst.
+  if (!bleWakeArmed &&
+      (now - bleDisarmedAt) >= BLE_REARM_SILENCE_MS &&
+      (!bleSeenEver || bleSilentMs >= (int32_t)BLE_REARM_SILENCE_MS)) {
+    bleWakeArmed = true;
+    Serial.println("[BLE ] controller quiet -> wake re-armed");
+  }
+
+  if (state == STATE_OFF && bleWakeArmed && blePresent && !bleInhibited) {
     powerOn("controller present (BLE)", now);
   }
 
@@ -435,12 +470,13 @@ static void normalLoop() {
   // --- Heartbeat ---
   if (now - lastHeartbeat >= HEARTBEAT_MS) {
     lastHeartbeat = now;
-    Serial.printf("[HB  ] state=%s board=%s btn=%s ble=%s | sense: %umV (%s) "
+    Serial.printf("[HB  ] state=%s board=%s btn=%s ble=%s/%s | sense: %umV (%s) "
                   "| heap=%u loopMax=%luus | wifi=%s rssi=%d mqtt=%s\n",
                   stateName(state),
                   boardSenseStable ? "UP" : "DOWN",
                   buttonStable ? "down" : "up",
                   blePresent ? "present" : "absent",
+                  bleWakeArmed ? "armed" : "disarmed",
                   senseMv, boardRaw ? "high" : "low",
                   (unsigned)ESP.getFreeHeap(), loopMaxUs,
                   haWifiConnected() ? "up" : "down", (int)haRssi(),

@@ -105,9 +105,11 @@ The button is the primary control and always works, even with no controller conf
 ## Bluetooth controller wake
 
 When a controller is bound (via the portal), the machine **follows the controller**:
-turn the controller on and the machine powers up. After a power-off there's a short
-guard window so the controller's reconnect burst can't immediately switch it back on —
-turn the controller off within that window to keep the machine down.
+turn the controller on and the machine powers up. After a power-off the wake is
+disarmed until the controller has been silent for 10 s, so its reconnect burst (an Xbox
+controller keeps advertising for a while after losing its host) can't switch the
+machine back on. Once the controller has given up and gone quiet, pressing its power
+button wakes the machine again.
 
 ## Setup portal
 

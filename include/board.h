@@ -175,3 +175,16 @@ const unsigned long BLE_PRESENCE_TIMEOUT_MS = 4000;
 // machine follows it back on. It also rides out the brief reconnect-advertising
 // burst the controller emits when it loses its host at shutdown.
 const unsigned long BLE_WAKE_COOLDOWN_MS = 15000;
+
+// After any power-off the BLE wake is disarmed, and re-arms only once the
+// controller has been continuously silent for this long (measured from the
+// power-off as well as from the last sighting). The cooldown above is a fixed
+// timer and is not enough on its own: an Xbox Wireless Controller that loses its
+// host keeps reconnect-advertising well past BLE_WAKE_COOLDOWN_MS, so a
+// level-triggered wake powers the machine straight back on. With the latch, a
+// controller left on keeps the machine down until it gives up and goes quiet;
+// the next press of its power button is then a fresh appearance and wakes us.
+// Must exceed the longest gap inside the controller's reconnect burst, or the
+// latch re-arms mid-burst — watch the "[BLE ] controller seen/lost" log lines
+// to measure it. Also kept above BLE_PRESENCE_TIMEOUT_MS by construction.
+const unsigned long BLE_REARM_SILENCE_MS = 10000;
