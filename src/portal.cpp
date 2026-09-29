@@ -390,7 +390,7 @@ void portalBegin() {
   Serial.println("=== BC250 PSU controller : SETUP MODE ===");
 
   // Keep the PSU off and the button readable while configuring.
-  pinMode(PS_ON_PIN, OUTPUT_OPEN_DRAIN);
+  pinMode(PS_ON_PIN, OUTPUT);
   digitalWrite(PS_ON_PIN, PS_ON_RELEASE);
   pinMode(BUTTON_GND, OUTPUT);
   digitalWrite(BUTTON_GND, LOW);

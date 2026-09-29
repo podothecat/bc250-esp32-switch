@@ -31,7 +31,7 @@ button-and-BLE only, exactly as it did before. Configuring WiFi but not MQTT joi
 network without appearing in Home Assistant. The button remains the primary control and
 works standalone in every configuration.
 
-Be aware that the ESP32 cannot perform a *soft* power off. It drives the PSU's `PS_ON#` line directly and has no channel into the running OS, so Power On energises the rail and the board boots because it now has power, while Power Off cuts that rail outright — the equivalent of holding an ATX power button for 5 seconds. Neither one asks the OS to do anything.
+Be aware that the ESP32 cannot perform a *soft* power off. It controls the PSU's `PS_ON#` line through an NPN transistor and has no channel into the running OS, so Power On energises the rail and the board boots because it now has power, while Power Off cuts that rail outright — the equivalent of holding an ATX power button for 5 seconds. Neither one asks the OS to do anything.
 
 Shutting down from inside the OS is the clean path, and it is handled properly: the ESP sees `TPMS1` drop and releases the PSU on its own. Reserve the HA switch and the 5 second button hold for a machine that is already wedged.
 
@@ -45,12 +45,19 @@ and the board.
 |----------|-------------|-------|
 | GPIO5 | Momentary switch, terminal A | Read with internal pull-up |
 | GPIO6 | Momentary switch, terminal B | Driven LOW as the switch's ground |
-| GPIO4 | ATX `PS_ON#` (green wire) | **Open-drain**, active LOW: LOW = PSU on, released = off |
+| GPIO4 | 2.2kΩ resistor → 2N3904 base | **Push-pull output**: HIGH = PSU on, LOW = off |
 | GPIO3 | BC250 `TPMS1` (pin 9) | ~3.3 V when the board is up, 0 when off |
 | 5VSB / GND | PSU standby + common ground | Permanent power for the ESP |
 
-`PS_ON#` idles at ~5 V (pulled up inside the PSU). GPIO4 is driven open-drain so the
-3.3 V part never fights the 5 V rail — it only ever sinks to ground to switch the PSU on.
+Connect the 2N3904 collector to PSU `PS_ON#` and its emitter to common GND.
+Place a 10kΩ resistor between base and emitter to keep the transistor off while
+GPIO4 is high-impedance during reset. Check the transistor manufacturer's pinout.
+GPIO4 HIGH turns the transistor on, pulling `PS_ON#` LOW; GPIO4 LOW releases it.
+The firmware starts with GPIO4 LOW in both normal and setup modes.
+
+Do not connect `PS_ON#` directly to GPIO4: its PSU pull-up voltage may exceed the
+GPIO input range, and open-drain mode does not protect against that voltage.
+This firmware requires the NPN circuit; it is not compatible with direct wiring.
 
 `TPMS1` is a higher-impedance signal that hovers near the logic threshold, so it's read
 as an analog voltage with hysteresis rather than a digital pin.
@@ -63,7 +70,7 @@ as an analog voltage with hysteresis rather than a digital pin.
                +3.3V ─┤  1 │ 13 ├─ +3.3V
                +3.3V ─┤  2 │ 14 ├─ −12V
                  GND ─┤  3 │ 15 ├─ GND
-                 +5V ─┤  4 │ 16 ├─ PS_ON#   ◄── GPIO4  (green, open-drain, active LOW)
+                 +5V ─┤  4 │ 16 ├─ PS_ON#   ◄── 2N3904 collector
                  GND ─┤  5 │ 17 ├─ GND      ◄── ESP GND (any GND pin works)
                  +5V ─┤  6 │ 18 ├─ GND
                  GND ─┤  7 │ 19 ├─ GND
@@ -187,7 +194,7 @@ pio run -t uploadfs   # web UI filesystem
   original ~50 % duty is used unchanged.
 - Serial debug runs over USB-CDC at **115200** baud.
 - Pin assignments and all timing constants live in [include/board.h](include/board.h).
-- **Every "off" is a hard rail cut.** The controller drives `PS_ON#` directly and has
+- **Every "off" is a hard rail cut.** The controller drives `PS_ON#` through an NPN and has
   no channel into the running OS, so the HA switch and the 5 s button hold yank power
   rather than requesting a shutdown. A shutdown started *inside* the OS is handled
   cleanly — the ESP sees TPMS1 drop and follows the board down. Plans for a graceful

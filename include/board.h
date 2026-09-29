@@ -8,7 +8,7 @@
 //   --------                      --------
 //   GPIO5  (BUTTON_SENSE)  <-----> momentary switch terminal A
 //   GPIO6  (BUTTON_GND)    <-----> momentary switch terminal B
-//   GPIO4  (PS_ON_PIN)     <-----> ATX PS_ON# (green wire, active LOW)
+//   GPIO4  (PS_ON_PIN)     ------> 2.2k resistor -> 2N3904 base
 //   GPIO3  (BOARD_SENSE)   <-----> BC250 TPMS1 pin 9 (3.3V = board on)
 //
 // The switch bridges GPIO5 and GPIO6. GPIO6 is driven LOW to act as a local
@@ -16,10 +16,11 @@
 const int BUTTON_SENSE = 5;
 const int BUTTON_GND   = 6;
 
-// ATX PS_ON# is active LOW and idles at ~5V (pulled up inside the PSU).
-// Driven as OPEN-DRAIN so we never push 3.3V against the PSU's 5V pull-up:
-//   LOW  -> sink to GND -> PSU on
-//   HIGH -> high-impedance -> PSU pull-up wins -> PSU off
+// External NPN driver: collector -> PSU PS_ON#, emitter -> common GND,
+// with a 10k resistor from base to emitter to hold it off when GPIO4 floats.
+// GPIO4 uses push-pull OUTPUT: HIGH turns the NPN on and pulls PS_ON# LOW;
+// LOW turns the NPN off and lets the PSU pull PS_ON# up. Never connect PS_ON#
+// directly to GPIO4: open-drain mode does not provide overvoltage protection.
 const int PS_ON_PIN = 4;
 
 // BC250 TPMS1 (pin 9): reads ~3.3V while the board is powered/booted, 0 when
@@ -47,8 +48,8 @@ const int SENSE_OVERSAMPLE = 16;
 
 //*******  Logic levels  ***************
 
-const int PS_ON_ASSERT  = LOW;   // PSU on
-const int PS_ON_RELEASE = HIGH;  // PSU off (open-drain -> high-Z)
+const int PS_ON_ASSERT  = HIGH;  // NPN on -> PS_ON# LOW -> PSU on
+const int PS_ON_RELEASE = LOW;   // NPN off -> PS_ON# released -> PSU off
 
 //*******  Timing (milliseconds)  ***************
 

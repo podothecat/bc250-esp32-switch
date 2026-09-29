@@ -110,12 +110,12 @@ static bool readBoardSense(uint32_t *outMv = nullptr) {
 
 static void psuOn() {
   digitalWrite(PS_ON_PIN, PS_ON_ASSERT);
-  Serial.println("[PSU ] PS_ON# asserted (LOW) -> PSU ON");
+  Serial.println("[PSU ] GPIO HIGH -> NPN on -> PS_ON# LOW -> PSU ON");
 }
 
 static void psuOff() {
   digitalWrite(PS_ON_PIN, PS_ON_RELEASE);
-  Serial.println("[PSU ] PS_ON# released (high-Z) -> PSU OFF");
+  Serial.println("[PSU ] GPIO LOW -> NPN off -> PS_ON# released -> PSU OFF");
 }
 
 // Shared power-on path, used by both the button and the BLE wake. Takes the
@@ -243,8 +243,8 @@ static bool debounce(bool raw, bool *stable, bool *lastRaw,
 static void normalBegin() {
   Serial.println("=== BC250 PSU controller ===");
 
-  // PS_ON# open-drain, released by default so the PSU stays off at boot.
-  pinMode(PS_ON_PIN, OUTPUT_OPEN_DRAIN);
+  // Push-pull drive for the external NPN; LOW keeps the PSU off at boot.
+  pinMode(PS_ON_PIN, OUTPUT);
   digitalWrite(PS_ON_PIN, PS_ON_RELEASE);
 
   // Switch: GPIO6 = local ground, GPIO5 = sensed input with pull-up.
@@ -300,6 +300,10 @@ static const char *resetReasonName(esp_reset_reason_t r) {
 }
 
 void setup() {
+  // Hold the NPN off before waiting for USB or loading configuration.
+  pinMode(PS_ON_PIN, OUTPUT);
+  digitalWrite(PS_ON_PIN, PS_ON_RELEASE);
+
   Serial.begin(115200);
   // Give USB-CDC a moment to enumerate so early logs aren't lost.
   unsigned long t0 = millis();
