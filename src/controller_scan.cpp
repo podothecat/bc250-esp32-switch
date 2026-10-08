@@ -5,7 +5,67 @@ static ControllerFound found;
 static bool setupScan;
 static bool coexScan;
 
-#if defined(CONFIG_IDF_TARGET_ESP32)
+#if defined(BC250_BLUEPAD32)
+#include <Bluepad32.h>
+#include "bt/uni_bt.h"
+static bool initialized;
+static bool wanted;
+static uint32_t lastDiscoveryCommand;
+static constexpr uint32_t DISCOVERY_SETTLE_MS = 500;
+static void connected(ControllerPtr controller) {
+  if (!controller->isGamepad()) { controller->disconnect(); return; }
+  auto properties = controller->getProperties();
+  char addr[18];
+  snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
+           properties.btaddr[0], properties.btaddr[1], properties.btaddr[2],
+           properties.btaddr[3], properties.btaddr[4], properties.btaddr[5]);
+  Serial.printf("[HID] connected %s (%s), disconnecting\n", addr, controller->getModelName().c_str());
+  if (wanted && found) found(addr, controller->getModelName().c_str(), -127, true);
+  controller->disconnect();
+}
+void controllerScanPrepare() {
+  if (initialized) return;
+  BP32.setup(connected, [](ControllerPtr) { Serial.println("[HID] disconnected"); });
+  // The package starts its first periodic inquiry before Arduino setup. Wait
+  // for that command to leave BTstack's pending state before cancelling it.
+  // Virtual devices are disabled by default; avoid another queued command here.
+  delay(1000);
+  BP32.enableNewBluetoothConnections(false);
+  lastDiscoveryCommand = millis();
+  initialized = true;
+}
+bool controllerScanBegin(ControllerFound callback, bool setup, bool coex) {
+  found = callback; setupScan = setup; coexScan = coex;
+  controllerScanPrepare();
+  return controllerScanStart();
+}
+bool controllerScanStart() {
+  wanted = true;
+  // Discovery commands execute asynchronously on the BT task. Allow an
+  // initial stop to finish before requesting another inquiry in loop().
+  return initialized;
+}
+bool controllerScanStop() {
+  wanted = false;
+  if (initialized) {
+    BP32.enableNewBluetoothConnections(false);
+    lastDiscoveryCommand = millis();
+  }
+  return true;
+}
+void controllerScanLoop() {
+  if (!initialized) return;
+  BP32.update();
+  if (wanted != uni_bt_enable_new_connections_is_enabled() &&
+      uint32_t(millis() - lastDiscoveryCommand) >= DISCOVERY_SETTLE_MS) {
+    BP32.enableNewBluetoothConnections(wanted);
+    lastDiscoveryCommand = millis();
+  }
+}
+bool controllerScanRunning() { return initialized && wanted && uni_bt_enable_new_connections_is_enabled(); }
+ControllerScanStatus controllerScanStatus() { return {true, false, controllerScanRunning(), 0, 0}; }
+
+#elif defined(CONFIG_IDF_TARGET_ESP32)
 void controllerScanPrepare() {}
 #include <esp32-hal-bt.h>
 #include <esp_bt_main.h>

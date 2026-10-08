@@ -237,6 +237,9 @@ static void normalBegin() {
                 (config.wakeAddrCount == 0) ? "(none)" : config.wakeAddr.c_str());
 
   startBleScan(wifiConfigured());
+#if defined(BC250_BLUEPAD32)
+  setBleScanActive(state == STATE_OFF);
+#endif
   haBegin();
 }
 
@@ -266,6 +269,7 @@ static const char *resetReasonName(esp_reset_reason_t r) {
 }
 
 void setup() {
+  controllerScanPrepare();
   Serial.begin(115200);
   // Give native USB serial time to enumerate where the target uses it.
   unsigned long t0 = millis();
@@ -448,6 +452,9 @@ static void normalLoop() {
   // Optional: release the radio while the machine isn't OFF. The BLE wake only
   // acts in STATE_OFF, so nothing is lost except during that window.
   if (BLE_SCAN_ONLY_WHEN_OFF
+#if defined(BC250_BLUEPAD32)
+      || true
+#endif
   ) {
     setBleScanActive(state == STATE_OFF);
   }
@@ -485,8 +492,43 @@ static void normalLoop() {
   haLoop(now, hs, state != STATE_BOOTING);
 }
 
+#if defined(BC250_SERIAL_TEST)
+// USB bench testing only. Does not write pairing selection or setup state to NVS.
+static void serialTestLoop() {
+  static char command[48];
+  static size_t length;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n') {
+      if (length < sizeof(command) - 1) command[length++] = c;
+      else length = 0;
+      continue;
+    }
+    command[length] = 0; length = 0;
+    unsigned int b[6]; int consumed = 0;
+    if (sscanf(command, "test %2x:%2x:%2x:%2x:%2x:%2x%n",
+               &b[0], &b[1], &b[2], &b[3], &b[4], &b[5], &consumed) == 6 &&
+        command[consumed] == 0) {
+      controllerScanStop();
+      char addr[18];
+      snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
+               b[0], b[1], b[2], b[3], b[4], b[5]);
+      config.wakeAddr = config.wakeAddrs[0] = addr;
+      config.wakeAddrCount = 1;
+      bleSeenEver = false;
+      if (g_setupMode) { g_setupMode = false; normalBegin(); }
+      else startBleScan(wifiConfigured());
+      Serial.printf("[TEST] temporary binding %s; restart restores saved config\n", addr);
+    }
+  }
+}
+#endif
 
 void loop() {
+#if defined(BC250_SERIAL_TEST)
+  serialTestLoop();
+#endif
   if (g_setupMode) {
     portalLoop();
     return;

@@ -9,8 +9,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / 'src/controller_scan.cpp').read_text()
 # Compile actual WROOM implementation with fake SDK calls, not a reimplementation.
-source = source.split('#if defined(CONFIG_IDF_TARGET_ESP32)')[0] + source.split(
-    '#if defined(CONFIG_IDF_TARGET_ESP32)')[1].split('\n#else')[0]
+source = source.split('#if defined(BC250_BLUEPAD32)')[0] + source.split(
+    '#elif defined(CONFIG_IDF_TARGET_ESP32)')[1].split('\n#else')[0]
 source = '\n'.join(line for line in source.splitlines() if not line.startswith('#include'))
 shim = r'''
 #include <cassert>

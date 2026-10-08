@@ -435,12 +435,12 @@
         const list = (data.devices || []).sort((a, b) => b.rssi - a.rssi);
         $("scan-state").textContent = scanStatus(data, list.length);
         $("classic-hint").textContent = data.classicSupported
-          ? "Use pairing mode: PS + Create on PS5; PS + SHARE on PS4. Classic inquiry requires a discoverable controller."
+          ? "Pair with this board first: PS + Create on PS5; PS + SHARE on PS4. Select the connected gamepad and save. Later, PS-button reconnect can wake the PC."
           : "This board supports BLE only; PlayStation Classic controllers cannot be discovered.";
         const box = $("dev-list");
         box.textContent = "";
         for (const d of list) {
-          const el = makeRow(d.name || "(unknown)", d.addr + " · " + (d.transport === "classic" ? "Classic" : "BLE"), d.rssi, d.addr);
+          const el = makeRow(d.name || "(unknown)", d.addr + " · " + (d.transport === "classic" ? "Gamepad HID" : "BLE"), d.rssi, d.addr);
           el.onclick = () => {
             try { selected = readSelected(); }
             catch (e) { $("dev-msg").textContent = e.message; return; }

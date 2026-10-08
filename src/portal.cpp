@@ -620,6 +620,11 @@ void portalBegin() {
 
 void portalLoop() {
   dnsServer.processNextRequest();
+#if defined(BC250_BLUEPAD32)
+  // Paired devices can still reconnect after discovery stops. Drain callbacks
+  // so they are released even when no Wi-Fi client or picker is active.
+  controllerScanLoop();
+#endif
   servicePortalBleScan();
 
   // Button held in setup mode = escape back to normal mode (only useful once

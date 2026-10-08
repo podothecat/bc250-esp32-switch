@@ -36,7 +36,21 @@ static const uint8_t HA_MAX_DEVICE_TYPES = 12;
 // buffer itself, so we do it here.
 static const uint16_t MQTT_BUFFER_SIZE = 512;
 
+#if ESP_ARDUINO_VERSION_MAJOR < 3
+// Arduino 2 lacks setConnectionTimeout; preserve the same bounded connect.
+class BoundedWiFiClient : public WiFiClient {
+ public:
+  int connect(IPAddress ip, uint16_t port) override {
+    return WiFiClient::connect(ip, port, MQTT_CONNECT_TIMEOUT_MS);
+  }
+  int connect(const char *host, uint16_t port) override {
+    return WiFiClient::connect(host, port, MQTT_CONNECT_TIMEOUT_MS);
+  }
+};
+static BoundedWiFiClient wifiClient;
+#else
 static WiFiClient wifiClient;
+#endif
 static WiFiUDP    wolUdp;
 static HADevice   device;
 static HAMqtt     mqtt(wifiClient, device, HA_MAX_DEVICE_TYPES);
@@ -376,7 +390,9 @@ void haBegin() {
 
   // Bound a single blocking TCP connect. PubSubClient's own default is 15s,
   // which would stall the loop far past the point of missing a button press.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
   wifiClient.setConnectionTimeout(MQTT_CONNECT_TIMEOUT_MS);
+#endif
 
   Serial.printf("[WIFI] connecting to '%s' (txpwr=%d)\n",
                 config.wifiSsid.c_str(), (int)WiFi.getTxPower());
