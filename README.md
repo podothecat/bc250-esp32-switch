@@ -223,3 +223,53 @@ physical wiring follows the matching column above.
   rather than requesting a shutdown. A shutdown started *inside* the OS is handled
   cleanly — the ESP sees TPMS1 drop and follows the board down. Plans for a graceful
   path are in [docs/future-work.md](docs/future-work.md).
+
+### Multiple controllers
+
+The setup portal supports up to four controllers. Tap scanned devices to toggle
+selection, or enter up to four comma-separated BLE MAC addresses. Save to replace
+the registered list; clear the field and save to disable BLE wake. Existing
+single-controller settings are retained when upgrading. Any registered controller
+can wake the BC250. After power-off, all registered controllers must stop
+advertising for the existing silence period before BLE wake re-arms.
+
+Upload both firmware and the portal filesystem when updating this feature:
+Run `pio run -e esp32-wroom32 -t upload`, then
+`pio run -e esp32-wroom32 -t uploadfs` (use the C3 environment for C3).
+
+### BLE discovery in the setup portal
+
+Bluetooth scanning starts only when a connected phone opens the authenticated
+controller picker, which refreshes every two seconds. Before that, setup runs
+Wi-Fi only so Bluetooth does not compete with phone association/DHCP. Scanning
+pauses when all AP clients disconnect or picker polling stops for 12 seconds. The
+list holds the 48 most recently observed addresses, expires devices after 30
+seconds without sightings, and replaces the oldest entry when full.
+**Scan again** clears only the discovery list and restarts BLE scanning; it keeps
+the saved controller configuration and current selections. The picker shows
+scanner state, last reception time, cache occupancy, and replacement count.
+A stopped or failed scan is retried at three-second intervals. C3 disables
+NimBLE's internal result storage; WROOM copies Bluepad32 connection data directly
+into the bounded cache without retaining a second results list.
+
+### PlayStation controllers on WROOM32
+
+WROOM32 uses the official Bluepad32 4.1.0 Arduino package (Arduino 2.0.17)
+with PlatformIO espressif32 6.9.0. C3 retains its Arduino 3 / NimBLE build.
+WROOM reports ready gamepad connections rather than raw inquiry results.
+
+Open the controller picker, then hold **PS + Create** on DualSense or
+**PS + SHARE** on DualShock 4 until the light bar flashes. Select the gamepad
+and save; up to four addresses are supported. Existing address registrations
+are retained, but a controller must also pair with this board to reconnect.
+Bluetooth keys are preserved across reboots and are not cleared by rescan.
+
+In normal mode, only a registered gamepad connection can trigger power-on.
+The gamepad is immediately disconnected, and discovery is paused while the PC
+is starting or on. Connections arriving while detection is paused are released
+without waking the PC. Setup discovery remains limited to an active picker
+with a connected Wi-Fi client. RSSI is unavailable for HID connection events.
+PS-button wake and subsequent PC reconnection require testing with the actual
+controller; disconnecting from the board does not guarantee automatic PC pairing.
+
+Upload both WROOM firmware and the filesystem image for this update.
