@@ -6,7 +6,8 @@ const char *const DEFAULT_DEVICE_NAME = "BC250";
 // Broker port used when nothing is stored (or a stored value is nonsense).
 static const uint16_t DEFAULT_MQTT_PORT = 1883;
 
-Config config{"", "", false, "", "", "", DEFAULT_MQTT_PORT, "", "", ""};
+Config config{"", "", false, "", "", false, "", DEFAULT_MQTT_PORT,
+              "", "", ""};
 
 static Preferences prefs;
 static const char *NS = "bc250";
@@ -18,6 +19,7 @@ static const char *K_PASS_HASH  = "passHash";
 static const char *K_FORCE_SETUP = "forceSetup";
 static const char *K_WIFI_SSID  = "wifiSsid";
 static const char *K_WIFI_PASS  = "wifiPass";
+static const char *K_WAKE_ON_LAN = "wakeOnLan";
 static const char *K_MQTT_HOST  = "mqttHost";
 static const char *K_MQTT_PORT  = "mqttPort";
 static const char *K_MQTT_USER  = "mqttUser";
@@ -33,6 +35,7 @@ void loadConfig() {
   config.forceSetup = prefs.getBool(K_FORCE_SETUP, false);
   config.wifiSsid   = prefs.getString(K_WIFI_SSID, "");
   config.wifiPass   = prefs.getString(K_WIFI_PASS, "");
+  config.wakeOnLan  = prefs.getBool(K_WAKE_ON_LAN, false);
   config.mqttHost   = prefs.getString(K_MQTT_HOST, "");
   config.mqttPort   = prefs.getUShort(K_MQTT_PORT, DEFAULT_MQTT_PORT);
   config.mqttUser   = prefs.getString(K_MQTT_USER, "");
@@ -64,12 +67,14 @@ void setForceSetup(bool force) {
   prefs.end();
 }
 
-void setWifiCreds(const String &ssid, const String &pass) {
+void setWifiSettings(const String &ssid, const String &pass, bool wakeOnLan) {
   config.wifiSsid = ssid;
   config.wifiPass = pass;
+  config.wakeOnLan = !ssid.isEmpty() && wakeOnLan;
   prefs.begin(NS, false);
   prefs.putString(K_WIFI_SSID, ssid);
   prefs.putString(K_WIFI_PASS, pass);
+  prefs.putBool(K_WAKE_ON_LAN, config.wakeOnLan);
   prefs.end();
 }
 

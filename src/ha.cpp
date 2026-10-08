@@ -2,6 +2,7 @@
 
 #include <ArduinoHA.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <esp_mac.h>
 
 #include "board.h"
@@ -36,6 +37,7 @@ static const uint8_t HA_MAX_DEVICE_TYPES = 12;
 static const uint16_t MQTT_BUFFER_SIZE = 512;
 
 static WiFiClient wifiClient;
+static WiFiUDP    wolUdp;
 static HADevice   device;
 static HAMqtt     mqtt(wifiClient, device, HA_MAX_DEVICE_TYPES);
 
@@ -62,6 +64,10 @@ static unsigned long g_lastMqttTry  = 0;
 static uint32_t      g_connectCount = 0;      // WL_CONNECTED transitions
 static IPAddress     g_brokerIp;
 static bool          g_brokerResolved = false;
+static bool          g_wolListening = false;
+static unsigned long g_lastWolBeginAttempt = 0;
+static const uint16_t WOL_UDP_PORT = 9;
+static const unsigned long WOL_RETRY_MS = 5000;
 
 // Publish throttling.
 static unsigned long g_lastDiagPublish  = 0;
@@ -150,6 +156,63 @@ static void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 static void wifiConnect() {
   WiFi.begin(config.wifiSsid.c_str(),
              config.wifiPass.length() ? config.wifiPass.c_str() : nullptr);
+}
+
+static bool isMagicPacket(const uint8_t *packet, size_t length) {
+  if (length < 6 + 16 * 6) return false;
+  for (size_t i = 0; i < 6; i++) {
+    if (packet[i] != 0xFF) return false;
+  }
+  const uint8_t *mac = packet + 6;
+  bool allZero = true;
+  for (size_t i = 0; i < 6; i++) {
+    if (mac[i] != 0) allZero = false;
+  }
+  if (allZero || (mac[0] & 1)) return false;
+  for (size_t i = 6; i < 6 + 16 * 6; i++) {
+    if (packet[i] != mac[(i - 6) % 6]) return false;
+  }
+  return true;
+}
+
+static void serviceWakeOnLan(bool wifiConnected, unsigned long now) {
+  if (!config.wakeOnLan || !wifiConnected) {
+    if (g_wolListening) {
+      wolUdp.stop();
+      g_wolListening = false;
+      Serial.println("[WOL ] listener stopped");
+    }
+    return;
+  }
+
+  if (!g_wolListening && now - g_lastWolBeginAttempt >= WOL_RETRY_MS) {
+    g_lastWolBeginAttempt = now;
+    if (wolUdp.begin(WOL_UDP_PORT)) {
+      g_wolListening = true;
+      Serial.printf("[WOL ] listening on UDP port %u\n", WOL_UDP_PORT);
+    } else {
+      Serial.printf("[WOL ] failed to listen on UDP port %u; retrying\n",
+                    WOL_UDP_PORT);
+    }
+  }
+  if (!g_wolListening) return;
+
+  int packetSize = wolUdp.parsePacket();
+  if (packetSize < 6 + 16 * 6) return;
+
+  uint8_t packet[128];
+  int readSize = packetSize < static_cast<int>(sizeof(packet))
+                     ? packetSize
+                     : static_cast<int>(sizeof(packet));
+  int bytesRead = wolUdp.read(packet, readSize);
+  if (bytesRead < 6 + 16 * 6 ||
+      !isMagicPacket(packet, static_cast<size_t>(bytesRead))) {
+    return;
+  }
+
+  Serial.printf("[WOL ] magic packet received for %02x:%02x:%02x:%02x:%02x:%02x\n",
+                packet[6], packet[7], packet[8], packet[9], packet[10], packet[11]);
+  if (g_pending == HA_CMD_NONE) g_pending = HA_CMD_WOL_POWER_ON;
 }
 
 // Resolve the broker hostname ONCE, when WiFi comes up. PubSubClient::connect()
@@ -342,6 +405,8 @@ void haLoop(unsigned long now, const HaState &s, bool allowReconnect) {
       Serial.println("[WIFI] link lost");
     }
   }
+
+  serviceWakeOnLan(connected, now);
 
   // Backstop re-issue of WiFi.begin(). setAutoReconnect() covers most drops, but
   // not every failure mode leaves the SDK retrying. Non-blocking: begin()

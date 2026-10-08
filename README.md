@@ -12,6 +12,8 @@ button — plus optional "turn on when I pick up my controller" via Bluetooth.
 - **Boot watchdog**: if the board doesn't come up within 10 s, the PSU is released.
 - **BLE controller wake** (optional): when a bound controller (e.g. an 8BitDo) powers
   on, the machine powers on with it.
+- **Wake-on-LAN** (optional): listen for WoL magic packets over WiFi and power on
+  the machine through the same guarded power-on path as the physical button.
 - **Home Assistant** (optional): joins your WiFi and appears in HA over MQTT with
   auto-discovery as a switch plus power/state/signal sensors.
 - **WiFi setup portal**: configure the bound controller from a phone — no reflashing.
@@ -122,6 +124,7 @@ Hold the button ≥ 8 s while off (or on first use) to start the portal:
 1. Connect to the open WiFi network **`BC250 Switch Setup`** and open `http://192.168.4.1`.
 2. Create a password.
 3. **WiFi** — pick your network from the list captured at startup, or type one in.
+   You can also enable WoL detection here; it requires a configured WiFi network.
 4. **MQTT** — your broker's host, port and credentials.
 5. **Controller** — pick it from the live BLE scan, or enter its MAC.
 6. **Finish** — name the device, review, and reboot into normal operation.
@@ -133,6 +136,15 @@ alone. Skipping just MQTT joins the network without appearing in Home Assistant.
 To clear something later, blank the field and save — an empty SSID disables WiFi, an
 empty broker host disables MQTT, and an empty MAC un-binds the controller. Password
 fields left blank keep whatever is already stored; clear one and save to remove it.
+Clearing the WiFi network also disables WoL detection.
+
+When enabled, WoL listens for UDP packets on port 9 containing the standard magic
+packet pattern (six `FF` bytes followed by the target MAC repeated 16 times). The
+WiFi setup screen displays the ESP32's WiFi MAC when WoL is enabled; use that as the
+target MAC in your WoL app. The ESP32 accepts valid WoL packets regardless of the
+embedded target MAC, so this address is used to address the packet, not as a filter.
+The sending device must broadcast the packet onto the network the ESP32 has joined;
+router/VLAN broadcast isolation can prevent delivery.
 
 The WiFi list is scanned once at startup, before the setup AP exists — a live rescan
 would take the AP off-channel and drop your phone's connection. To refresh it, re-enter

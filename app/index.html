@@ -18,6 +18,8 @@
     label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
     input { width:100%; padding:11px; border-radius:8px; border:1px solid #333;
             background:#161616; color:var(--fg); font:inherit; font-size:15px; }
+    input[type="checkbox"] { width:auto; accent-color:var(--accent); }
+    .check { display:flex; align-items:center; gap:8px; margin-top:14px; color:var(--fg); }
     button { width:100%; padding:12px; margin-top:16px; border:none; border-radius:8px;
              background:var(--accent); color:#000; font:inherit; font-weight:bold;
              font-size:15px; cursor:pointer; }
@@ -75,6 +77,13 @@
       <label for="wifi-pw">WiFi password</label>
       <input id="wifi-pw" type="password" autocomplete="off" />
       <div class="hint" id="wifi-pw-hint"></div>
+      <label class="check"><input id="wifi-wol" type="checkbox" /> Wake the machine on LAN magic packets</label>
+      <div class="hint">Requires this device to be connected to the same network that receives the WoL broadcast.</div>
+      <div class="hidden" id="wol-mac-wrap">
+        <label for="wol-mac">MAC address to enter in your WoL app</label>
+        <input id="wol-mac" readonly />
+        <div class="hint">Send the WoL magic packet to this MAC. The ESP32 will turn on the machine when it receives it.</div>
+      </div>
       <button id="wifi-btn">Save &amp; continue</button>
       <div class="row">
         <button class="secondary" data-back>Back</button>
@@ -255,6 +264,9 @@
     async function loadSettings() {
       settings = await api("/api/settings");
       $("wifi-ssid").value = settings.wifiSsid || "";
+      $("wifi-wol").checked = !!settings.wakeOnLan;
+      $("wol-mac").value = settings.wolMac || "";
+      $("wol-mac-wrap").classList.toggle("hidden", !settings.wakeOnLan);
       $("mq-host").value   = settings.mqttHost || "";
       $("mq-port").value   = settings.mqttPort || 1883;
       $("mq-user").value   = settings.mqttUser || "";
@@ -312,16 +324,23 @@
       });
     }
     $("wifi-ssid").oninput = refreshWifiSel;
+    $("wifi-wol").onchange = () => {
+      $("wol-mac-wrap").classList.toggle("hidden", !$("wifi-wol").checked);
+    };
 
     $("wifi-btn").onclick = async () => {
       const msg = $("wifi-msg");
       msg.className = "msg";
-      const body = { ssid: $("wifi-ssid").value.trim() };
+      const body = {
+        ssid: $("wifi-ssid").value.trim(),
+        wakeOnLan: $("wifi-wol").checked,
+      };
       if (wifiPwTouched) body.password = $("wifi-pw").value;
       try {
         $("wifi-btn").disabled = true;
         await api("/api/wifi", "POST", body);
         settings.wifiSsid = body.ssid;
+        settings.wakeOnLan = !!body.ssid && body.wakeOnLan;
         if (wifiPwTouched) settings.wifiPassSet = $("wifi-pw").value.length > 0;
         goNext();
       } catch (e) {
@@ -429,6 +448,8 @@
       box.textContent = "";
       const rows = [
         ["WiFi", settings.wifiSsid || "disabled"],
+        ["Wake-on-LAN", settings.wakeOnLan ? "enabled" : "disabled"],
+        ...(settings.wakeOnLan ? [["WoL MAC", settings.wolMac]] : []),
         ["Broker", settings.mqttHost
           ? settings.mqttHost + ":" + (settings.mqttPort || 1883)
           : "disabled"],

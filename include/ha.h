@@ -45,6 +45,7 @@ struct HaState {
 enum HaCommand {
   HA_CMD_NONE,
   HA_CMD_POWER_ON,
+  HA_CMD_WOL_POWER_ON,
   HA_CMD_POWER_OFF,
   HA_CMD_ENTER_SETUP,
   HA_CMD_RESTART,

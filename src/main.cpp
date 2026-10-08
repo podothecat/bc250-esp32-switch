@@ -339,6 +339,9 @@ static void normalLoop() {
     case HA_CMD_POWER_ON:
       if (state == STATE_OFF) powerOn("Home Assistant switch on", now);
       break;
+    case HA_CMD_WOL_POWER_ON:
+      if (state == STATE_OFF) powerOn("Wake-on-LAN packet", now);
+      break;
     case HA_CMD_POWER_OFF:
       if (state != STATE_OFF) powerOff("Home Assistant switch off", now);
       break;

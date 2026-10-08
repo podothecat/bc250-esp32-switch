@@ -9,6 +9,7 @@
 //   forceSetup - request that the next boot enters the WiFi setup portal.
 //   wifiSsid   - station-mode SSID ("" => WiFi disabled, AP-only at setup).
 //   wifiPass   - station-mode passphrase ("" => open network).
+//   wakeOnLan  - listen for WoL magic packets while connected to WiFi.
 //   mqttHost   - broker hostname or IP ("" => MQTT disabled).
 //   mqttPort   - broker port (default 1883).
 //   mqttUser   - broker username ("" => anonymous).
@@ -24,6 +25,7 @@ struct Config {
   bool     forceSetup;
   String   wifiSsid;
   String   wifiPass;
+  bool     wakeOnLan;
   String   mqttHost;
   uint16_t mqttPort;
   String   mqttUser;
@@ -43,9 +45,8 @@ void setPassHash(const String &hash);
 void setForceSetup(bool force);
 
 // Grouped setters. Each writes all of its keys in a single NVS transaction —
-// the per-key putString() below opens and closes the namespace every call, so
-// a four-field form submit would otherwise cost four transactions.
-void setWifiCreds(const String &ssid, const String &pass);
+// the per-key putString() below opens and closes the namespace every call.
+void setWifiSettings(const String &ssid, const String &pass, bool wakeOnLan);
 void setMqttSettings(const String &host, uint16_t port, const String &user,
                      const String &pass);
 void setDeviceName(const String &name);
