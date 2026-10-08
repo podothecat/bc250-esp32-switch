@@ -19,6 +19,7 @@ const int BUTTON_SENSE = 5;
 const int BUTTON_GND   = 6;
 const int PS_ON_PIN    = 4;
 const int BOARD_SENSE  = 3;
+const int BOOT_BUTTON_PIN = -1;  // WROOM-only portal shortcut
 #elif defined(CONFIG_IDF_TARGET_ESP32)
 //   ESP32-WROOM-32                 External
 //   GPIO18 (BUTTON_SENSE) <------> momentary switch terminal A
@@ -29,6 +30,7 @@ const int BUTTON_SENSE = 18;
 const int BUTTON_GND   = 19;
 const int PS_ON_PIN    = 23;
 const int BOARD_SENSE  = 34;
+const int BOOT_BUTTON_PIN = 0;   // onboard BOOT button, active LOW
 #else
 #error "Unsupported ESP32 target: define board pin assignments in include/board.h"
 #endif

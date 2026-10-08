@@ -105,8 +105,14 @@ board through the ATX connector.
 | Tap while **off** | Power on |
 | Hold ≥ 5 s while **on** | Force power off |
 | Hold ≥ 8 s while **off** | Enter WiFi setup portal |
+| WROOM32 onboard **BOOT**: hold ≥ 8 s while **off** | Enter WiFi setup portal (GPIO0) |
 
 The button is the primary control and always works, even with no controller configured.
+
+On WROOM32, the BOOT shortcut only enters setup; a short press does nothing.
+Use it after the ESP32 has booted, with the BC250 off. Release BOOT once setup
+starts. Holding BOOT during power-on or while pressing RST enters the chip's
+download mode instead.
 
 ## Bluetooth controller wake
 

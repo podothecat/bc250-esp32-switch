@@ -42,6 +42,13 @@ static bool          pressStartedOff   = false;  // press began while OFF
 static bool          longPressFired    = false;
 static bool          setupFired        = false;
 
+// Independent BOOT shortcut: never acts as a power button.
+static bool          bootButtonStable = false;
+static bool          bootButtonLastRaw = false;
+static unsigned long bootButtonLastChange = 0;
+static unsigned long bootButtonPressStart = 0;
+static bool          bootButtonArmed = false;
+
 // --- Board-sense debounce ---
 static bool          boardSenseStable  = false;  // debounced TPMS1 HIGH
 static bool          boardSenseLastRaw = false;
@@ -251,6 +258,7 @@ static void normalBegin() {
   pinMode(BUTTON_GND, OUTPUT);
   digitalWrite(BUTTON_GND, LOW);
   pinMode(BUTTON_SENSE, INPUT_PULLUP);
+  if (BOOT_BUTTON_PIN >= 0) pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
 
   // TPMS1 sense: read as ADC over the full 0-3.3V range.
   analogSetPinAttenuation(BOARD_SENSE, ADC_11db);
@@ -362,6 +370,22 @@ static void normalLoop() {
   uint32_t senseMv;
   bool buttonRaw = (digitalRead(BUTTON_SENSE) == LOW);   // pressed == LOW
   bool boardRaw  = readBoardSense(&senseMv);             // board up (hysteresis)
+
+  if (BOOT_BUTTON_PIN >= 0) {
+    bool bootRaw = (digitalRead(BOOT_BUTTON_PIN) == LOW);
+    if (debounce(bootRaw, &bootButtonStable, &bootButtonLastRaw,
+                 &bootButtonLastChange, now, DEBOUNCE_MS)) {
+      bootButtonPressStart = now;
+      bootButtonArmed = bootButtonStable && state == STATE_OFF;
+    }
+    // Cancel if the machine starts during the hold; release before retrying.
+    if (state != STATE_OFF || boardRaw) bootButtonArmed = false;
+    if (bootButtonStable && bootButtonArmed &&
+        (now - bootButtonPressStart) >= SETUP_HOLD_MS) {
+      bootButtonArmed = false;
+      enterSetupMode("BOOT hold (>8s) while OFF");
+    }
+  }
 
   if (debounce(buttonRaw, &buttonStable, &buttonLastRaw,
                &buttonLastChange, now, DEBOUNCE_MS)) {
