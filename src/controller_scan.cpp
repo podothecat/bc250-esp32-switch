@@ -12,8 +12,59 @@ static bool initialized;
 static bool wanted;
 static uint32_t lastDiscoveryCommand;
 static constexpr uint32_t DISCOVERY_SETTLE_MS = 500;
+// Bluepad32 4.1.0 shares one callback registration between its safe APIs.
+// Use independent registrations, and never enqueue the same one twice.
+struct BtCommand {
+  btstack_context_callback_registration_t registration{};
+  bool queued = false;
+  int index = -1;
+  bool enabled = false;
+};
+static BtCommand discoveryCommand;
+static BtCommand disconnectCommands[BP32_MAX_CONTROLLERS];
+static portMUX_TYPE commandMux = portMUX_INITIALIZER_UNLOCKED;
+static void runBtCommand(void *context) {
+  auto *command = static_cast<BtCommand *>(context);
+  portENTER_CRITICAL(&commandMux);
+  int index = command->index;
+  bool enabled = command->enabled;
+  portEXIT_CRITICAL(&commandMux);
+  if (index < 0) {
+    uni_bt_enable_new_connections_unsafe(enabled);
+  } else {
+    auto *device = uni_hid_device_get_instance_for_idx(index);
+    if (device && device->conn.connected) {
+      // uni_hid_device_disconnect() invalidates the connection handle before
+      // the HCI event arrives. Request only the ACL close here; the native
+      // HCI handler must retain ownership of notification and device deletion.
+      gap_disconnect(device->conn.handle);
+    }
+  }
+  portENTER_CRITICAL(&commandMux);
+  command->queued = false;
+  portEXIT_CRITICAL(&commandMux);
+}
+static void enqueueBtCommand(BtCommand &command, int index, bool enabled) {
+  portENTER_CRITICAL(&commandMux);
+  if (command.queued) { portEXIT_CRITICAL(&commandMux); return; }
+  command.queued = true;
+  command.index = index;
+  command.enabled = enabled;
+  command.registration.callback = runBtCommand;
+  command.registration.context = &command;
+  portEXIT_CRITICAL(&commandMux);
+  btstack_run_loop_execute_on_main_thread(&command.registration);
+}
+static void releaseController(ControllerPtr controller) {
+  int index = controller->index();
+  if (index >= 0 && index < BP32_MAX_CONTROLLERS)
+    enqueueBtCommand(disconnectCommands[index], index, false);
+}
+static void requestDiscovery(bool enabled) {
+  enqueueBtCommand(discoveryCommand, -1, enabled);
+}
 static void connected(ControllerPtr controller) {
-  if (!controller->isGamepad()) { controller->disconnect(); return; }
+  if (!controller->isGamepad()) { releaseController(controller); return; }
   auto properties = controller->getProperties();
   char addr[18];
   snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -21,7 +72,7 @@ static void connected(ControllerPtr controller) {
            properties.btaddr[3], properties.btaddr[4], properties.btaddr[5]);
   Serial.printf("[HID] connected %s (%s), disconnecting\n", addr, controller->getModelName().c_str());
   if (wanted && found) found(addr, controller->getModelName().c_str(), -127, true);
-  controller->disconnect();
+  releaseController(controller);
 }
 void controllerScanPrepare() {
   if (initialized) return;
@@ -30,7 +81,7 @@ void controllerScanPrepare() {
   // for that command to leave BTstack's pending state before cancelling it.
   // Virtual devices are disabled by default; avoid another queued command here.
   delay(1000);
-  BP32.enableNewBluetoothConnections(false);
+  requestDiscovery(false);
   lastDiscoveryCommand = millis();
   initialized = true;
 }
@@ -48,7 +99,7 @@ bool controllerScanStart() {
 bool controllerScanStop() {
   wanted = false;
   if (initialized) {
-    BP32.enableNewBluetoothConnections(false);
+    requestDiscovery(false);
     lastDiscoveryCommand = millis();
   }
   return true;
@@ -58,7 +109,7 @@ void controllerScanLoop() {
   BP32.update();
   if (wanted != uni_bt_enable_new_connections_is_enabled() &&
       uint32_t(millis() - lastDiscoveryCommand) >= DISCOVERY_SETTLE_MS) {
-    BP32.enableNewBluetoothConnections(wanted);
+    requestDiscovery(wanted);
     lastDiscoveryCommand = millis();
   }
 }
