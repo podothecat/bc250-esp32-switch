@@ -7,7 +7,7 @@
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
 #include <ESPAsyncWebServer.h>
-#include <NimBLEDevice.h>
+#include "controller_scan.h"
 #include <esp_mac.h>
 #include <esp_random.h>
 #include "mbedtls/sha256.h"
@@ -27,16 +27,41 @@ static String          g_token;
 // Deferred restart (so the HTTP response can flush before we reboot).
 static unsigned long   g_restartAt = 0;
 
-// --- BLE device discovery (active scan, accumulated for the picker) ---
+// --- BLE device discovery (bounded, recent-device cache for the picker) ---
 struct BleDev {
   char addr[18];
   char name[33];
   int  rssi;
   bool used;
+  uint32_t lastSeen;
+  bool classic;
 };
 static const int       MAX_DEVS = 48;
 static BleDev          devs[MAX_DEVS];
 static portMUX_TYPE    devsMux = portMUX_INITIALIZER_UNLOCKED;
+static const uint32_t BLE_DEVICE_TTL_MS = 30000;
+static const uint32_t BLE_SCAN_RETRY_MS = 3000;
+static const uint32_t BLE_PICKER_IDLE_MS = 12000;
+// Protected by devsMux: the HTTP task only queues scan operations for loop().
+static bool           bleRescanRequested = false;
+static bool           blePickerRequested = false;
+static uint32_t       blePickerLastRequest = 0;
+static bool           bleScannerRunning = false;
+static const char    *bleScanError = "";
+static bool           bleReceived = false;
+static uint32_t       bleLastReceived = 0;
+static uint32_t       bleEvictions = 0;
+// Only accessed by the Arduino loop task.
+static uint32_t       bleLastScanAttempt = 0;
+static bool           bleScanInitialized = false;
+static bool           bleScanRequested = false;
+
+// Caller holds devsMux. Unsigned subtraction also handles millis() rollover.
+static void expireBleDevices(uint32_t now) {
+  for (auto &dev : devs)
+    if (dev.used && uint32_t(now - dev.lastSeen) >= BLE_DEVICE_TTL_MS)
+      dev.used = false;
+}
 
 // --- WiFi network list (scanned once, before the AP exists) ---
 // A live scanNetworks() in AP mode takes the SoftAP off-channel for seconds and
@@ -52,40 +77,41 @@ static const int MAX_NETS = 24;
 static WifiNet   nets[MAX_NETS];
 static int       netCount = 0;
 
-class SetupScanCallbacks : public NimBLEScanCallbacks {
-  void onResult(const NimBLEAdvertisedDevice *d) override {
-    std::string addrStr = d->getAddress().toString();
-    const char *addr = addrStr.c_str();
-    std::string name = d->getName();
-    int rssi = d->getRSSI();
-
-    portENTER_CRITICAL(&devsMux);
-    int idx = -1, free = -1;
-    for (int i = 0; i < MAX_DEVS; i++) {
-      if (devs[i].used) {
-        if (strcmp(devs[i].addr, addr) == 0) { idx = i; break; }
-      } else if (free < 0) {
-        free = i;
-      }
+static void setupControllerFound(const char *addr, const char *name, int rssi,
+                               bool classic) {
+  portENTER_CRITICAL(&devsMux);
+  uint32_t now = millis();
+  bleReceived = true;
+  bleLastReceived = now;
+  expireBleDevices(now);
+  int idx = -1, free = -1, oldest = -1;
+  for (int i = 0; i < MAX_DEVS; i++) {
+    if (devs[i].used) {
+      if (strcmp(devs[i].addr, addr) == 0) { idx = i; break; }
+      if (oldest < 0 || uint32_t(now - devs[i].lastSeen) >
+                        uint32_t(now - devs[oldest].lastSeen)) oldest = i;
+    } else if (free < 0) {
+      free = i;
     }
-    if (idx < 0 && free >= 0) {
-      idx = free;
-      devs[idx].used = true;
-      strncpy(devs[idx].addr, addr, sizeof(devs[idx].addr) - 1);
-      devs[idx].addr[sizeof(devs[idx].addr) - 1] = 0;
-      devs[idx].name[0] = 0;
-    }
-    if (idx >= 0) {
-      devs[idx].rssi = rssi;
-      if (!name.empty()) {
-        strncpy(devs[idx].name, name.c_str(), sizeof(devs[idx].name) - 1);
-        devs[idx].name[sizeof(devs[idx].name) - 1] = 0;
-      }
-    }
-    portEXIT_CRITICAL(&devsMux);
   }
-};
-static SetupScanCallbacks scanCallbacks;
+  if (idx < 0) {
+    idx = free >= 0 ? free : oldest;
+    if (devs[idx].used) ++bleEvictions;
+    devs[idx].used = true;
+    strncpy(devs[idx].addr, addr, sizeof(devs[idx].addr) - 1);
+    devs[idx].addr[sizeof(devs[idx].addr) - 1] = 0;
+    devs[idx].name[0] = 0;
+    devs[idx].lastSeen = 0;
+  }
+  if (rssi != -127 || !devs[idx].lastSeen) devs[idx].rssi = rssi;
+  devs[idx].classic = classic;
+  devs[idx].lastSeen = now;
+  if (name[0]) {
+    strncpy(devs[idx].name, name, sizeof(devs[idx].name) - 1);
+    devs[idx].name[sizeof(devs[idx].name) - 1] = 0;
+  }
+  portEXIT_CRITICAL(&devsMux);
+}
 
 // --- Helpers ---
 
@@ -168,6 +194,8 @@ static void handleStatus(AsyncWebServerRequest *req) {
   JsonDocument doc;
   doc["passwordSet"] = config.passHash.length() > 0;
   doc["wakeAddr"]    = config.wakeAddr;
+  JsonArray addrs = doc["wakeAddrs"].to<JsonArray>();
+  for (uint8_t i = 0; i < config.wakeAddrCount; ++i) addrs.add(config.wakeAddrs[i]);
   doc["configured"]  = isConfigured();
   String out;
   serializeJson(doc, out);
@@ -200,6 +228,8 @@ static void handleGetSettings(AsyncWebServerRequest *req) {
   doc["mqttPassSet"] = config.mqttPass.length() > 0;
   doc["deviceName"]  = config.deviceName;
   doc["wakeAddr"]    = config.wakeAddr;
+  JsonArray addrs = doc["wakeAddrs"].to<JsonArray>();
+  for (uint8_t i = 0; i < config.wakeAddrCount; ++i) addrs.add(config.wakeAddrs[i]);
   String out;
   serializeJson(doc, out);
   req->send(200, "application/json", out);
@@ -349,11 +379,34 @@ static void handleBleDevices(AsyncWebServerRequest *req) {
 
   // Snapshot under the lock, then build JSON without holding it.
   BleDev snap[MAX_DEVS];
+  JsonDocument doc;
   portENTER_CRITICAL(&devsMux);
+  uint32_t now = millis();
+  blePickerRequested = true;
+  blePickerLastRequest = now;
+  expireBleDevices(now);
   memcpy(snap, devs, sizeof(devs));
+  bool scanning = bleScannerRunning;
+  bool restarting = bleRescanRequested || !bleScannerRunning;
+  const char *error = bleScanError;
+  bool received = bleReceived;
+  uint32_t lastAge = now - bleLastReceived;
+  uint32_t evictions = bleEvictions;
   portEXIT_CRITICAL(&devsMux);
 
-  JsonDocument doc;
+  ControllerScanStatus bt = controllerScanStatus();
+  doc["classicSupported"] = bt.classicSupported;
+  doc["bleScanning"] = bt.bleRunning;
+  doc["classicScanning"] = bt.classicRunning;
+  doc["bleError"] = bt.bleError;
+  doc["classicError"] = bt.classicError;
+  doc["scanning"] = scanning;
+  doc["restarting"] = restarting;
+  doc["scanError"] = error;
+  doc["capacity"] = MAX_DEVS;
+  doc["evictions"] = evictions;
+  if (received) doc["lastSeenAgeMs"] = lastAge;
+  else doc["lastSeenAgeMs"] = nullptr;
   JsonArray arr = doc["devices"].to<JsonArray>();
   for (int i = 0; i < MAX_DEVS; i++) {
     if (!snap[i].used) continue;
@@ -361,32 +414,125 @@ static void handleBleDevices(AsyncWebServerRequest *req) {
     o["addr"] = snap[i].addr;
     o["name"] = snap[i].name;
     o["rssi"] = snap[i].rssi;
+    o["ageMs"] = uint32_t(now - snap[i].lastSeen);
+    o["transport"] = snap[i].classic ? "classic" : "ble";
   }
   String out;
   serializeJson(doc, out);
   req->send(200, "application/json", out);
 }
 
+static void handleBleRescan(AsyncWebServerRequest *req) {
+  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
+  portENTER_CRITICAL(&devsMux);
+  bleRescanRequested = true;
+  blePickerRequested = true;
+  blePickerLastRequest = millis();
+  portEXIT_CRITICAL(&devsMux);
+  req->send(202, "application/json", "{\"ok\":true}");
+}
+
+// All Bluetooth lifecycle operations run on the Arduino task, never the HTTP task.
+static void servicePortalBleScan() {
+  uint32_t now = millis();
+  portENTER_CRITICAL(&devsMux);
+  bool pickerActive = blePickerRequested &&
+      uint32_t(now - blePickerLastRequest) < BLE_PICKER_IDLE_MS;
+  bool rescan = bleRescanRequested;
+  expireBleDevices(now);
+  portEXIT_CRITICAL(&devsMux);
+  // Do not compete with phone association/DHCP. Only authenticated picker
+  // polling activates Bluetooth, and loss of all AP clients stops it immediately.
+  if (!pickerActive || WiFi.softAPgetStationNum() == 0) {
+    if (bleScanRequested && controllerScanStop()) {
+      bleScanRequested = false;
+      Serial.println("[PORTAL] Bluetooth paused; WiFi setup only");
+    }
+    portENTER_CRITICAL(&devsMux);
+    bleScannerRunning = false;
+    portEXIT_CRITICAL(&devsMux);
+    return;
+  }
+  if (bleScanRequested) controllerScanLoop();
+  bool running = controllerScanRunning();
+  portENTER_CRITICAL(&devsMux);
+  bleScannerRunning = running;
+  portEXIT_CRITICAL(&devsMux);
+  if (!rescan && running) return;
+  if (uint32_t(now - bleLastScanAttempt) < BLE_SCAN_RETRY_MS) return;
+  bleLastScanAttempt = now;
+
+  if (rescan && running && !controllerScanStop()) {
+    portENTER_CRITICAL(&devsMux);
+    bleScanError = "Could not stop scan; retrying";
+    portEXIT_CRITICAL(&devsMux);
+    Serial.println("[PORTAL] BLE stop failed; retrying in 3s");
+    return;
+  }
+  if (rescan) {
+    portENTER_CRITICAL(&devsMux);
+    memset(devs, 0, sizeof(devs));
+    bleReceived = false;
+    bleEvictions = 0;
+    bleRescanRequested = false;
+    portEXIT_CRITICAL(&devsMux);
+  }
+  bool started;
+  if (!bleScanInitialized) {
+    started = controllerScanBegin(setupControllerFound, true, true);
+    bleScanInitialized = true;
+  } else started = controllerScanStart();
+  bleScanRequested = true;
+  portENTER_CRITICAL(&devsMux);
+  bleScannerRunning = started && controllerScanRunning();
+  bleScanError = bleScannerRunning ? "" : "Could not start scan; retrying";
+  portEXIT_CRITICAL(&devsMux);
+  Serial.printf("[PORTAL] BLE scan %s%s\n", started ? "started" : "failed",
+                started ? "" : "; retrying in 3s");
+}
+
 static void handleBleSelect(AsyncWebServerRequest *req, JsonVariant &json) {
   if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonObject o = json.as<JsonObject>();
-  String addr = o["addr"] | "";
-  addr.trim();
-  // An empty address un-binds the controller (BLE wake off). Without this there
-  // is no way to clear a binding once made — the only escape was an NVS wipe.
-  if (addr.isEmpty()) {
-    setWakeAddr("");
-    Serial.println("[PORTAL] controller un-bound (BLE wake disabled)");
-    req->send(200, "application/json", "{\"ok\":true}");
-    return;
+  String addrs[MAX_WAKE_CONTROLLERS];
+  uint8_t count = 0;
+  if (o["addrs"].is<JsonArray>()) {
+    JsonArray list = o["addrs"].as<JsonArray>();
+    if (list.size() > MAX_WAKE_CONTROLLERS) {
+      sendJsonError(req, 400, "maximum 4 controllers"); return;
+    }
+    for (JsonVariant value : list) {
+      if (!value.is<const char *>()) {
+        sendJsonError(req, 400, "invalid address"); return;
+      }
+      addrs[count++] = value.as<String>();
+    }
+  } else if (!o["addrs"].isUnbound() && !o["addrs"].is<JsonArray>()) {
+    sendJsonError(req, 400, "expected address list"); return;
+  } else if (o["addr"].is<const char *>()) {
+    // Accept the old portal's single-address request.
+    String addr = o["addr"].as<String>();
+    addr.trim();
+    if (!addr.isEmpty()) addrs[count++] = addr;
+  } else {
+    sendJsonError(req, 400, "expected address list"); return;
   }
-  if (addr.length() != 17) {  // "aa:bb:cc:dd:ee:ff"
-    sendJsonError(req, 400, "invalid address");
-    return;
+  for (uint8_t i = 0; i < count; ++i) {
+    addrs[i].trim();
+    addrs[i].toLowerCase();
+    if (!validWakeAddr(addrs[i])) {
+      sendJsonError(req, 400, "invalid address"); return;
+    }
+    for (uint8_t j = 0; j < i; ++j) {
+      if (addrs[i] == addrs[j]) {
+        sendJsonError(req, 400, "duplicate address"); return;
+      }
+    }
   }
-  addr.toLowerCase();
-  setWakeAddr(addr);
-  Serial.printf("[PORTAL] bound controller %s\n", addr.c_str());
+  if (!setWakeAddrs(addrs, count)) {
+    sendJsonError(req, 500, "could not save controllers"); return;
+  }
+  Serial.printf("[PORTAL] bound %u controller(s)\n", count);
   req->send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -419,6 +565,14 @@ void portalBegin() {
   // after softAP() would knock any connected phone off the AP for seconds.
   scanWifiNetworks();
 
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
+    if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED ||
+        event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+      Serial.printf("[PORTAL] AP client %s; clients=%u heap=%u\n",
+                    event == ARDUINO_EVENT_WIFI_AP_STACONNECTED ? "connected" : "disconnected",
+                    WiFi.softAPgetStationNum(), ESP.getFreeHeap());
+    }
+  });
   WiFi.mode(WIFI_AP);
   bool ok = WiFi.softAP(AP_SSID);  // open network
   // Keep the configured TX power consistent across targets. Must be set AFTER
@@ -430,16 +584,10 @@ void portalBegin() {
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
   dnsServer.start(53, "*", WiFi.softAPIP());
 
-  // BLE active scan so the picker shows device names + live RSSI. Keep the duty
-  // cycle LOW (window << interval): WiFi and BLE share a radio, so a high-duty
-  // scan can starve the SoftAP.
-  NimBLEDevice::init("");
-  NimBLEScan *scan = NimBLEDevice::getScan();
-  scan->setScanCallbacks(&scanCallbacks, true);
-  scan->setActiveScan(true);
-  scan->setInterval(500);  // ms
-  scan->setWindow(45);     // ms (~9% duty, leaves the radio free for WiFi)
-  scan->start(0, false);
+  // Keep Bluetooth uninitialized until the phone is connected and the
+  // authenticated controller picker starts polling. Preserve Classic memory.
+  bleLastScanAttempt = millis() - BLE_SCAN_RETRY_MS;
+  Serial.println("[PORTAL] Bluetooth deferred until controller picker opens");
 
   // /api/status is deliberately unauthenticated (the UI needs it before login)
   // and already leaks wakeAddr. Everything below is authed — don't extend the
@@ -448,6 +596,7 @@ void portalBegin() {
   server.on("/api/settings", HTTP_GET, handleGetSettings);
   server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/api/ble/devices", HTTP_GET, handleBleDevices);
+  server.on("/api/ble/rescan", HTTP_POST, handleBleRescan);
   server.on("/api/finish", HTTP_POST, handleFinish);
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/password", handlePassword));
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/login", handleLogin));
@@ -471,6 +620,7 @@ void portalBegin() {
 
 void portalLoop() {
   dnsServer.processNextRequest();
+  servicePortalBleScan();
 
   // Button held in setup mode = escape back to normal mode (only useful once
   // configured; an unconfigured device just re-enters setup).

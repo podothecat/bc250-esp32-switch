@@ -4,7 +4,8 @@
 
 // Persistent configuration, stored in NVS via the Preferences library.
 //
-//   wakeAddr   - bound controller BLE MAC, lower-case colon form ("aa:bb:..").
+//   wakeAddrs  - up to four bound Bluetooth MACs, lower-case colon form ("aa:bb:..").
+//   wakeAddr   - first bound MAC, retained for single-controller compatibility.
 //   passHash   - SHA-256 hex of the portal password ("" => not set yet).
 //   forceSetup - request that the next boot enters the WiFi setup portal.
 //   wifiSsid   - station-mode SSID ("" => WiFi disabled, AP-only at setup).
@@ -19,8 +20,12 @@
 // Every field is optional. A device with no WiFi and no MQTT configured must
 // behave exactly as it did before those fields existed: the button is the
 // primary control and has to work standalone.
+constexpr uint8_t MAX_WAKE_CONTROLLERS = 4;
+
 struct Config {
-  String   wakeAddr;
+  String   wakeAddr;  // first address, retained for older portal clients
+  String   wakeAddrs[MAX_WAKE_CONTROLLERS];
+  uint8_t  wakeAddrCount;
   String   passHash;
   bool     forceSetup;
   String   wifiSsid;
@@ -40,7 +45,8 @@ extern const char *const DEFAULT_DEVICE_NAME;
 
 void loadConfig();
 
-void setWakeAddr(const String &addr);
+bool validWakeAddr(const String &addr);
+bool setWakeAddrs(const String *addrs, uint8_t count);
 void setPassHash(const String &hash);
 void setForceSetup(bool force);
 

@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <NimBLEDevice.h>
+#include "controller_scan.h"
 #include <esp_system.h>
 #include "board.h"
 #include "config.h"
@@ -55,7 +55,7 @@ static bool          boardSenseLastRaw = false;
 static unsigned long boardSenseChange  = 0;
 
 // --- BLE wake ---
-// Written from the NimBLE scan task, read from loop(). 32-bit aligned scalars
+// Written from the Bluetooth task, read from loop(). 32-bit aligned scalars
 // are atomic on the ESP32, so a plain volatile is enough here.
 static volatile bool          bleSeenEver = false;
 static volatile unsigned long bleLastSeen = 0;
@@ -151,76 +151,34 @@ static void powerOff(const char *reason, unsigned long now) {
   setState(STATE_OFF);
 }
 
-// NimBLE scan task: just records that the target controller was seen. The wake
-// decision (edge-detect + state check) happens in loop(), off this task.
-class WakeScanCallbacks : public NimBLEScanCallbacks {
-  void onResult(const NimBLEAdvertisedDevice *dev) override {
-    if (dev->getAddress().toString() == config.wakeAddr.c_str()) {
-      bleLastSeen = millis();
-      bleSeenEver = true;
-    }
+// Bluetooth callbacks only record sightings; power decisions stay in loop().
+static void controllerFound(const char *addr, const char *, int, bool classic) {
+  for (uint8_t i = 0; i < config.wakeAddrCount; ++i) {
+    if (strcmp(addr, config.wakeAddrs[i].c_str()) != 0) continue;
+    bleLastSeen = millis();
+    bleSeenEver = true;
+    if (classic) Serial.printf("[BT] registered Classic controller seen: %s\n", addr);
+    break;
   }
-};
-
-static WakeScanCallbacks wakeScanCallbacks;
+}
 
 static bool bleScanning = false;
 
-// coexWithWifi selects the low-duty scan parameters. Called as
-// startBleScan(wifiConfigured()), so a device with no WiFi keeps today's
-// behaviour exactly — same interval, same window, same wake latency.
 static void startBleScan(bool coexWithWifi) {
-  if (config.wakeAddr.isEmpty()) {
-    Serial.println("[BLE ] no controller bound; BLE wake disabled "
-                   "(hold button 8s while OFF to configure)");
+  if (config.wakeAddrCount == 0) {
+    Serial.println("[BT] no controller bound; wake disabled");
     return;
   }
-  NimBLEDevice::init("");
-  NimBLEScan *scan = NimBLEDevice::getScan();
-  scan->setScanCallbacks(&wakeScanCallbacks, true);  // true = report duplicates
-  scan->setActiveScan(false);  // passive: we only need the address, saves power
-
-  // Do not accumulate scan results. NimBLE defaults m_maxResults to 0xFF, and
-  // its cap check only applies for values in 1..0xFE, so by default NOTHING is
-  // capped: every new advertiser is heap-allocated onto a vector that is only
-  // cleared on DISC_COMPLETE — an event that never fires for a continuous
-  // start(0, false) scan. With BLE privacy addresses rotating every ~15 minutes,
-  // that grows without bound for as long as the machine sits OFF. Setting 0
-  // switches on the erase-after-callback path instead (NimBLEScan.cpp:343),
-  // which a passive scan does reach because it fires both onDiscovered and
-  // onResult on the first report. The portal's active scan is left alone: it
-  // accumulates deliberately to populate the picker, and is short-lived.
-  scan->setMaxResults(0);
-
-  uint16_t interval = coexWithWifi ? BLE_SCAN_INTERVAL_COEX_MS
-                                   : BLE_SCAN_INTERVAL_SOLO_MS;
-  uint16_t window   = coexWithWifi ? BLE_SCAN_WINDOW_COEX_MS
-                                   : BLE_SCAN_WINDOW_SOLO_MS;
-  scan->setInterval(interval);
-  scan->setWindow(window);       // <= interval
-  scan->start(0, false);         // 0 = scan continuously
-  bleScanning = true;
-  Serial.printf("[BLE ] scanning for controller %s (%s: %u/%u ms, ~%u%% duty)\n",
-                config.wakeAddr.c_str(), coexWithWifi ? "coex" : "solo",
-                interval, window, (unsigned)(100UL * window / interval));
+  bool started = controllerScanBegin(controllerFound, false, coexWithWifi);
+  bleScanning = true; // desired state, including automatic startup retries
+  Serial.printf("[BT] scan requested for %u controller(s): %s\n",
+                config.wakeAddrCount, started ? "started" : "failed; will retry");
 }
 
-// Stop/restart the scan around the machine being ON, used only when
-// BLE_SCAN_ONLY_WHEN_OFF is set. The wake decision only ever fires in
-// STATE_OFF, so the scan is dead weight while the machine is up; releasing the
-// radio hands the whole duty cycle back to WiFi.
 static void setBleScanActive(bool active) {
-  if (config.wakeAddr.isEmpty() || active == bleScanning) return;
-  NimBLEScan *scan = NimBLEDevice::getScan();
-  if (active) {
-    scan->start(0, false);
-    bleScanning = true;
-    Serial.println("[BLE ] scan resumed (machine OFF)");
-  } else {
-    scan->stop();
-    bleScanning = false;
-    Serial.println("[BLE ] scan paused (machine not OFF)");
-  }
+  if (config.wakeAddrCount == 0 || active == bleScanning) return;
+  if (active) bleScanning = controllerScanStart();
+  else if (controllerScanStop()) bleScanning = false;
 }
 
 // Persist a setup request and reboot into the WiFi portal.
@@ -276,7 +234,7 @@ static void normalBegin() {
 
   Serial.printf("[INIT] state=%s board=%s bound=%s\n",
                 stateName(state), boardSenseStable ? "UP" : "DOWN",
-                config.wakeAddr.isEmpty() ? "(none)" : config.wakeAddr.c_str());
+                (config.wakeAddrCount == 0) ? "(none)" : config.wakeAddr.c_str());
 
   startBleScan(wifiConfigured());
   haBegin();
@@ -335,6 +293,7 @@ void setup() {
 }
 
 static void normalLoop() {
+  controllerScanLoop();
   unsigned long now = millis();
 
   // --- Drain any command from Home Assistant ---
@@ -488,7 +447,8 @@ static void normalLoop() {
 
   // Optional: release the radio while the machine isn't OFF. The BLE wake only
   // acts in STATE_OFF, so nothing is lost except during that window.
-  if (BLE_SCAN_ONLY_WHEN_OFF) {
+  if (BLE_SCAN_ONLY_WHEN_OFF
+  ) {
     setBleScanActive(state == STATE_OFF);
   }
 
@@ -518,12 +478,13 @@ static void normalLoop() {
   hs.powerOn    = (state != STATE_OFF);   // BOOTING reports ON
   hs.boardUp    = boardSenseStable;
   hs.blePresent = blePresent;
-  hs.bleActive  = !config.wakeAddr.isEmpty();
+  hs.bleActive  = config.wakeAddrCount > 0;
   hs.senseMv    = senseMv;
   // A blocking connect attempt inside the 10s boot watchdog could stall long
   // enough to trip a spurious "boot timed out", so don't allow one while BOOTING.
   haLoop(now, hs, state != STATE_BOOTING);
 }
+
 
 void loop() {
   if (g_setupMode) {

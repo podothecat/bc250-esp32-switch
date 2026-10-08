@@ -6,8 +6,7 @@ const char *const DEFAULT_DEVICE_NAME = "BC250";
 // Broker port used when nothing is stored (or a stored value is nonsense).
 static const uint16_t DEFAULT_MQTT_PORT = 1883;
 
-Config config{"", "", false, "", "", false, "", DEFAULT_MQTT_PORT,
-              "", "", ""};
+Config config{};
 
 static Preferences prefs;
 static const char *NS = "bc250";
@@ -15,6 +14,7 @@ static const char *NS = "bc250";
 // NVS keys are capped at 15 characters, so the stored names don't always match
 // the struct field names ("devName" vs deviceName). Keep them here, once.
 static const char *K_WAKE_ADDR  = "wakeAddr";
+static const char *K_WAKE_ADDRS = "wakeAddrs";
 static const char *K_PASS_HASH  = "passHash";
 static const char *K_FORCE_SETUP = "forceSetup";
 static const char *K_WIFI_SSID  = "wifiSsid";
@@ -30,7 +30,25 @@ void loadConfig() {
   prefs.begin(NS, true);  // read-only
   // Every read carries a default, so a device provisioned before these keys
   // existed upgrades in place — no NVS wipe, no reprovisioning.
-  config.wakeAddr   = prefs.getString(K_WAKE_ADDR, "");
+  config.wakeAddrCount = 0;
+  for (auto &addr : config.wakeAddrs) addr = "";
+  // New list takes precedence, including an explicitly empty list.
+  String stored = prefs.isKey(K_WAKE_ADDRS)
+      ? prefs.getString(K_WAKE_ADDRS, "") : prefs.getString(K_WAKE_ADDR, "");
+  while (!stored.isEmpty() && config.wakeAddrCount < MAX_WAKE_CONTROLLERS) {
+    int comma = stored.indexOf(',');
+    String addr = comma < 0 ? stored : stored.substring(0, comma);
+    addr.trim();
+    addr.toLowerCase();
+    bool duplicate = false;
+    for (uint8_t i = 0; i < config.wakeAddrCount; ++i)
+      duplicate |= config.wakeAddrs[i] == addr;
+    if (validWakeAddr(addr) && !duplicate)
+      config.wakeAddrs[config.wakeAddrCount++] = addr;
+    if (comma < 0) break;
+    stored = stored.substring(comma + 1);
+  }
+  config.wakeAddr = config.wakeAddrCount ? config.wakeAddrs[0] : "";
   config.passHash   = prefs.getString(K_PASS_HASH, "");
   config.forceSetup = prefs.getBool(K_FORCE_SETUP, false);
   config.wifiSsid   = prefs.getString(K_WIFI_SSID, "");
@@ -50,9 +68,43 @@ static void putString(const char *key, const String &val) {
   prefs.end();
 }
 
-void setWakeAddr(const String &addr) {
-  config.wakeAddr = addr;
-  putString(K_WAKE_ADDR, addr);
+bool validWakeAddr(const String &addr) {
+  if (addr.length() != 17) return false;
+  for (unsigned i = 0; i < 17; ++i) {
+    char c = addr[i];
+    if (i % 3 == 2) { if (c != ':') return false; }
+    else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+      return false;
+  }
+  return true;
+}
+
+bool setWakeAddrs(const String *addrs, uint8_t count) {
+  if (count > MAX_WAKE_CONTROLLERS) return false;
+  String normalized[MAX_WAKE_CONTROLLERS];
+  String stored;
+  for (uint8_t i = 0; i < count; ++i) {
+    normalized[i] = addrs[i];
+    normalized[i].trim();
+    normalized[i].toLowerCase();
+    if (!validWakeAddr(normalized[i])) return false;
+    for (uint8_t j = 0; j < i; ++j)
+      if (normalized[i] == normalized[j]) return false;
+    if (i) stored += ',';
+    stored += normalized[i];
+  }
+  if (!prefs.begin(NS, false)) return false;
+  bool saved = prefs.putString(K_WAKE_ADDRS, stored) == stored.length() &&
+      prefs.isKey(K_WAKE_ADDRS) && prefs.getString(K_WAKE_ADDRS, "") == stored;
+  // Keep the first address for rollback to single-controller firmware.
+  if (saved) prefs.putString(K_WAKE_ADDR, count ? normalized[0] : String(""));
+  prefs.end();
+  if (!saved) return false;
+  for (uint8_t i = 0; i < MAX_WAKE_CONTROLLERS; ++i)
+    config.wakeAddrs[i] = normalized[i];
+  config.wakeAddrCount = count;
+  config.wakeAddr = count ? normalized[0] : String("");
+  return true;
 }
 
 void setPassHash(const String &hash) {

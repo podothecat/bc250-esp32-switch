@@ -119,13 +119,15 @@
     <!-- 4. Controller -->
     <div class="card hidden" id="screen-dev">
       <div class="steps" id="steps-dev"></div>
-      <div class="title">Select your controller</div>
+      <div class="title">Select up to 4 controllers</div>
       <div class="sub" style="margin:6px 0 0">
-        Optional. Turn the controller on so it appears below.
+        Optional. Turn controllers on, then tap each device to select or remove it.
       </div>
-      <div class="scanning" id="scan-state">Scanning…</div>
+      <div class="scanning" id="scan-state">Checking scanner…</div>
+      <button class="secondary" id="rescan-btn">Scan again</button>
+      <div class="sub" id="classic-hint"></div>
       <div id="dev-list"></div>
-      <label for="manual">Or enter a MAC manually</label>
+      <label for="manual">Selected MACs (comma-separated, maximum 4)</label>
       <input id="manual" placeholder="aa:bb:cc:dd:ee:ff" autocomplete="off" />
       <button id="save-btn">Save &amp; continue</button>
       <div class="row">
@@ -154,8 +156,10 @@
     const SCREENS = ["pass", "wifi", "mqtt", "dev", "done"];
     let current = "pass";
     let token = null;
-    let selected = null;      // bound controller MAC, or null
+    let selected = [];       // up to four controller MACs
     let pollTimer = null;
+    let devPollBusy = false;
+    let devPollGeneration = 0;
     let settings = {};
 
     const $ = (id) => document.getElementById(id);
@@ -221,7 +225,8 @@
 
       const rs = document.createElement("div");
       rs.className = "rssi";
-      rs.append(rssiBars(rssi), document.createElement("br"), rssi + " dBm");
+      if (rssi === -127) rs.append("RSSI unavailable");
+      else rs.append(rssiBars(rssi), document.createElement("br"), rssi + " dBm");
 
       el.append(nm, rs);
       return el;
@@ -271,8 +276,8 @@
       $("mq-port").value   = settings.mqttPort || 1883;
       $("mq-user").value   = settings.mqttUser || "";
       $("dev-name").value  = settings.deviceName || "";
-      selected = settings.wakeAddr || null;
-      $("manual").value = selected || "";
+      selected = settings.wakeAddrs || (settings.wakeAddr ? [settings.wakeAddr] : []);
+      $("manual").value = selected.join(", ");
       $("wifi-pw-hint").textContent = settings.wifiPassSet
         ? "A password is saved. Leave blank to keep it; clear it and save to remove it."
         : "Leave blank for an open network.";
@@ -383,33 +388,98 @@
       pollTimer = setInterval(pollDevices, 2000);
     }
     function stopDevPoll() {
+      ++devPollGeneration;
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     }
 
+    $("rescan-btn").onclick = async () => {
+      const button = $("rescan-btn");
+      button.disabled = true;
+      ++devPollGeneration; // Ignore a response from before the reset request.
+      try {
+        await api("/api/ble/rescan", "POST");
+        $("dev-list").textContent = "";
+        $("scan-state").textContent = "Restarting scan… Selected controllers are kept.";
+        await pollDevices();
+      } catch (e) {
+        $("scan-state").textContent = "Rescan error: " + e.message;
+      } finally {
+        button.disabled = false;
+      }
+    };
+
+    function scanStatus(data, count) {
+      const status = data.restarting ? "Restarting scan…"
+        : data.scanning ? "Scanning" : "Scanner stopped; retrying…";
+      const lastSeen = data.lastSeenAgeMs == null ? "No advertisements received yet"
+        : "Last received " + Math.floor(data.lastSeenAgeMs / 1000) + "s ago";
+      const parts = [status, count + "/" + data.capacity + " devices", lastSeen];
+      if (data.classicSupported) {
+        parts.push("BLE: " + (data.bleScanning ? "scanning" : "waiting") +
+          ", Classic: " + (data.classicScanning ? "scanning" : "waiting"));
+        if (data.bleError) parts.push("BLE error " + data.bleError);
+        if (data.classicError) parts.push("Classic error " + data.classicError);
+      }
+      if (data.evictions) parts.push(data.evictions + " older entries replaced");
+      if (data.scanError) parts.push(data.scanError);
+      return parts.join(" · ");
+    }
+
     async function pollDevices() {
+      if (devPollBusy) return;
+      devPollBusy = true;
+      const generation = devPollGeneration;
       try {
         const data = await api("/api/ble/devices");
+        if (generation !== devPollGeneration || current !== "dev") return;
         const list = (data.devices || []).sort((a, b) => b.rssi - a.rssi);
-        $("scan-state").textContent = list.length
-          ? "Scanning… " + list.length + " device(s) seen"
-          : "Scanning… (no devices yet)";
+        $("scan-state").textContent = scanStatus(data, list.length);
+        $("classic-hint").textContent = data.classicSupported
+          ? "Use pairing mode: PS + Create on PS5; PS + SHARE on PS4. Classic inquiry requires a discoverable controller."
+          : "This board supports BLE only; PlayStation Classic controllers cannot be discovered.";
         const box = $("dev-list");
         box.textContent = "";
         for (const d of list) {
-          const el = makeRow(d.name || "(unknown)", d.addr, d.rssi, d.addr);
-          el.onclick = () => { selected = d.addr; $("manual").value = d.addr; refreshSel(); };
+          const el = makeRow(d.name || "(unknown)", d.addr + " · " + (d.transport === "classic" ? "Classic" : "BLE"), d.rssi, d.addr);
+          el.onclick = () => {
+            try { selected = readSelected(); }
+            catch (e) { $("dev-msg").textContent = e.message; return; }
+            if (selected.includes(d.addr)) selected = selected.filter(a => a !== d.addr);
+            else if (selected.length < 4) selected.push(d.addr);
+            else { $("dev-msg").textContent = "Maximum 4 controllers. Remove one first."; return; }
+            $("dev-msg").textContent = "";
+            $("manual").value = selected.join(", ");
+            refreshSel();
+          };
           box.appendChild(el);
         }
         refreshSel();
       } catch (e) {
-        $("scan-state").textContent = "Scan error: " + e.message;
+        if (generation === devPollGeneration && current === "dev")
+          $("scan-state").textContent = "Scan error: " + e.message;
+      } finally {
+        devPollBusy = false;
       }
     }
 
+    function readSelected() {
+      const raw = $("manual").value.trim().toLowerCase();
+      const addrs = raw ? raw.split(",").map(a => a.trim()) : [];
+      if (addrs.length > 4) throw new Error("Maximum 4 controllers.");
+      if (addrs.some(a => !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(a)))
+        throw new Error("Enter valid MACs separated by commas, or clear to remove all.");
+      if (new Set(addrs).size !== addrs.length) throw new Error("Duplicate MAC address.");
+      return addrs;
+    }
+
     $("manual").oninput = () => {
-      const v = $("manual").value.trim().toLowerCase();
-      // Empty is valid: it un-binds the controller.
-      selected = v === "" ? null : (/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(v) ? v : null);
+      try {
+        selected = readSelected();
+        $("dev-msg").textContent = "";
+      } catch (e) {
+        selected = [];
+        $("dev-msg").textContent = e.message;
+      }
       refreshSel();
     };
 
@@ -417,23 +487,21 @@
       // Read the MAC off the dataset rather than scraping it back out of the
       // rendered text — the text is untrusted and may not round-trip.
       $("dev-list").querySelectorAll(".dev").forEach((el) => {
-        el.classList.toggle("sel", el.dataset.key === selected);
+        el.classList.toggle("sel", selected.includes(el.dataset.key));
       });
     }
 
     $("save-btn").onclick = async () => {
       const msg = $("dev-msg");
       msg.className = "msg";
-      const raw = $("manual").value.trim().toLowerCase();
-      if (raw !== "" && !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(raw)) {
-        msg.className = "msg err";
-        msg.textContent = "Not a valid MAC. Clear the field to un-bind.";
-        return;
-      }
+      let addrs;
+      try { addrs = readSelected(); }
+      catch (e) { msg.className = "msg err"; msg.textContent = e.message; return; }
       try {
         $("save-btn").disabled = true;
-        await api("/api/ble/select", "POST", { addr: raw });
-        settings.wakeAddr = raw;
+        await api("/api/ble/select", "POST", { addrs });
+        settings.wakeAddrs = addrs;
+        settings.wakeAddr = addrs[0] || "";
         goNext();
       } catch (e) {
         msg.className = "msg err"; msg.textContent = e.message;
@@ -453,7 +521,7 @@
         ["Broker", settings.mqttHost
           ? settings.mqttHost + ":" + (settings.mqttPort || 1883)
           : "disabled"],
-        ["Controller", settings.wakeAddr || "none"],
+        ["Controllers", (settings.wakeAddrs || []).join(", ") || settings.wakeAddr || "none"],
       ];
       for (const [k, v] of rows) {
         const line = document.createElement("div");
@@ -491,7 +559,8 @@
     (async () => {
       try {
         const st = await api("/api/status");
-        if (st.wakeAddr) $("subtitle").textContent = "Currently bound: " + st.wakeAddr;
+        const bound = st.wakeAddrs || (st.wakeAddr ? [st.wakeAddr] : []);
+        if (bound.length) $("subtitle").textContent = "Currently bound: " + bound.join(", ");
         initPassScreen(st.passwordSet);
       } catch (e) {
         $("subtitle").textContent = "Cannot reach device: " + e.message;
