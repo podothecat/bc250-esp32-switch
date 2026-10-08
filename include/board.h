@@ -1,33 +1,48 @@
 #pragma once
 
+#include <sdkconfig.h>
+
 //*******  Pin definitions  ***************
 //
 // BC250 PSU controller wiring:
 //
+// Pin assignments vary by target. The WROOM32 mapping avoids boot-strapping
+// pins, reserves an ADC1 input for board sense (WiFi-safe), and avoids GPIO6-11
+// which connect to the module's flash.
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
 //   ESP32-C3                      External
-//   --------                      --------
-//   GPIO5  (BUTTON_SENSE)  <-----> momentary switch terminal A
-//   GPIO6  (BUTTON_GND)    <-----> momentary switch terminal B
-//   GPIO4  (PS_ON_PIN)     <-----> ATX PS_ON# (green wire, active LOW)
-//   GPIO3  (BOARD_SENSE)   <-----> BC250 TPMS1 pin 9 (3.3V = board on)
-//
-// The switch bridges GPIO5 and GPIO6. GPIO6 is driven LOW to act as a local
-// ground, and GPIO5 is read with an internal pull-up: pressed reads LOW.
+//   GPIO5 (BUTTON_SENSE)  <------> momentary switch terminal A
+//   GPIO6 (BUTTON_GND)    <------> momentary switch terminal B
+//   GPIO4 (PS_ON_PIN)     <------> ATX PS_ON# (green wire, active LOW)
+//   GPIO3 (BOARD_SENSE)   <------> BC250 TPMS1 pin 9 (3.3V = board on)
 const int BUTTON_SENSE = 5;
 const int BUTTON_GND   = 6;
+const int PS_ON_PIN    = 4;
+const int BOARD_SENSE  = 3;
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+//   ESP32-WROOM-32                 External
+//   GPIO18 (BUTTON_SENSE) <------> momentary switch terminal A
+//   GPIO19 (BUTTON_GND)   <------> momentary switch terminal B
+//   GPIO23 (PS_ON_PIN)    <------> ATX PS_ON# (green wire, active LOW)
+//   GPIO34 (BOARD_SENSE)  <------> BC250 TPMS1 pin 9 (3.3V = board on)
+const int BUTTON_SENSE = 18;
+const int BUTTON_GND   = 19;
+const int PS_ON_PIN    = 23;
+const int BOARD_SENSE  = 34;
+#else
+#error "Unsupported ESP32 target: define board pin assignments in include/board.h"
+#endif
 
+// The switch bridges BUTTON_SENSE and BUTTON_GND. BUTTON_GND is driven LOW
+// to act as a local ground, and BUTTON_SENSE uses an internal pull-up.
 // ATX PS_ON# is active LOW and idles at ~5V (pulled up inside the PSU).
 // Driven as OPEN-DRAIN so we never push 3.3V against the PSU's 5V pull-up:
 //   LOW  -> sink to GND -> PSU on
 //   HIGH -> high-impedance -> PSU pull-up wins -> PSU off
-const int PS_ON_PIN = 4;
-
 // BC250 TPMS1 (pin 9): reads ~3.3V while the board is powered/booted, 0 when
 // off. In practice it's a higher-impedance source that settles near ~2.9V and
 // hovers close to the ESP's digital logic threshold, so digitalRead() flickers.
 // We read it as an ADC voltage with hysteresis instead (see thresholds below).
-const int BOARD_SENSE = 3;
-
 // Hysteresis thresholds for the analog board-sense reading. The gap between
 // them keeps a noisy signal sitting near the threshold from chattering:
 //   reading rises above HIGH -> treat as "board up"

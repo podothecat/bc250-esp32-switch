@@ -6,7 +6,7 @@
 #include "ha.h"
 #include "portal.h"
 
-// The ESP32-C3 is permanently powered from the ATX connector (5VSB), so it runs
+// The ESP is permanently powered from the ATX connector (5VSB), so it runs
 // independently of the PSU's main rails. It controls the SFX PSU through PS_ON#
 // and watches the BC250's TPMS1 line to know whether the board itself is up.
 //
@@ -65,7 +65,7 @@ static unsigned long bootStart    = 0;
 static unsigned long lastHeartbeat = 0;
 
 // Worst-case normalLoop() duration since the last heartbeat, in microseconds.
-// The loop has to sample GPIO5 often enough to catch a ~150ms button tap, so
+// The loop has to sample BUTTON_SENSE often enough to catch a ~150ms button tap, so
 // anything that blocks — WiFi association, a DNS lookup, a TCP connect to a
 // dead broker — shows up here first. Reset every heartbeat so a single stall
 // doesn't mask the steady state.
@@ -247,7 +247,7 @@ static void normalBegin() {
   pinMode(PS_ON_PIN, OUTPUT_OPEN_DRAIN);
   digitalWrite(PS_ON_PIN, PS_ON_RELEASE);
 
-  // Switch: GPIO6 = local ground, GPIO5 = sensed input with pull-up.
+  // Switch: BUTTON_GND is local ground; BUTTON_SENSE is read with pull-up.
   pinMode(BUTTON_GND, OUTPUT);
   digitalWrite(BUTTON_GND, LOW);
   pinMode(BUTTON_SENSE, INPUT_PULLUP);
@@ -301,17 +301,15 @@ static const char *resetReasonName(esp_reset_reason_t r) {
 
 void setup() {
   Serial.begin(115200);
-  // Give USB-CDC a moment to enumerate so early logs aren't lost.
+  // Give native USB serial time to enumerate where the target uses it.
   unsigned long t0 = millis();
   while (!Serial && (millis() - t0) < 2000) {
     delay(10);
   }
   Serial.println();
 
-  // Log why we rebooted. This board runs at CONFIG_ESP_BROWNOUT_DET_LVL=7 and
-  // has a known RF/power design flaw, so a WiFi transmit that browns the rail
-  // out is a real possibility — BROWNOUT here is the evidence for it, and
-  // distinguishes it from a crash (PANIC) or an intentional restart (SW).
+  // Log why we rebooted; this helps distinguish a power issue from a crash
+  // (PANIC) or an intentional restart (SW).
   esp_reset_reason_t rr = esp_reset_reason();
   Serial.printf("[INIT] reset reason: %s (%d)\n", resetReasonName(rr), (int)rr);
 

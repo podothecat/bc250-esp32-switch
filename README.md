@@ -1,6 +1,6 @@
 # BC250 ESP32 Power Switch
 
-An ESP32-C3 power controller for an AMD **BC250** board running as a desktop. The
+An ESP32 power controller for an AMD **BC250** board running as a desktop. The
 BC250 is fed from a PCI-E connector and has no ATX power button, so this firmware
 drives the SFX PSU's `PS_ON#` line and senses board power, giving you a real power
 button — plus optional "turn on when I pick up my controller" via Bluetooth.
@@ -37,20 +37,24 @@ Shutting down from inside the OS is the clean path, and it is handled properly: 
 
 ## Wiring
 
-The ESP32-C3 is permanently powered from the ATX connector's **5 V standby**, so it
-runs whether the machine is on or off. Share a common ground between the ESP, the PSU,
-and the board.
+The ESP is permanently powered from the ATX connector's **5 V standby**, so it runs
+whether the machine is on or off. Share a common ground between the ESP, the PSU, and
+the board.
 
-| ESP32-C3 | Connects to | Notes |
-|----------|-------------|-------|
-| GPIO5 | Momentary switch, terminal A | Read with internal pull-up |
-| GPIO6 | Momentary switch, terminal B | Driven LOW as the switch's ground |
-| GPIO4 | ATX `PS_ON#` (green wire) | **Open-drain**, active LOW: LOW = PSU on, released = off |
-| GPIO3 | BC250 `TPMS1` (pin 9) | ~3.3 V when the board is up, 0 when off |
-| 5VSB / GND | PSU standby + common ground | Permanent power for the ESP |
+| Signal | ESP32-C3 DevKitM-1 | ESP32-WROOM-32 Dev Module | Connects to | Notes |
+|--------|-------------------|-----------------------------|-------------|-------|
+| Button sense | GPIO5 | GPIO18 | Momentary switch, terminal A | Read with internal pull-up |
+| Button ground | GPIO6 | GPIO19 | Momentary switch, terminal B | Driven LOW as the switch's ground |
+| PSU control | GPIO4 | GPIO23 | ATX `PS_ON#` (green wire) | **Open-drain**, active LOW |
+| Board sense | GPIO3 | GPIO34 | BC250 `TPMS1` (pin 9) | ~3.3 V when the board is up, 0 when off |
+| Power / ground | 5V / GND | Dev board 5V/VIN / GND | PSU standby + common ground | Permanent power for the ESP |
 
-`PS_ON#` idles at ~5 V (pulled up inside the PSU). GPIO4 is driven open-drain so the
-3.3 V part never fights the 5 V rail — it only ever sinks to ground to switch the PSU on.
+Use the board-specific pins in the table; do not wire both columns at once. GPIO34 on
+the WROOM32 is input-only and is used for the ADC sense signal. `PS_ON#` idles at ~5 V
+(pulled up inside the PSU). The selected GPIO is driven open-drain so the 3.3 V part
+never fights the 5 V rail — it only ever sinks to ground to switch the PSU on.
+These assignments target development boards; verify that the listed GPIOs are exposed
+on your carrier. Do not feed 5 V directly into a bare WROOM32 module.
 
 `TPMS1` is a higher-impedance signal that hovers near the logic threshold, so it's read
 as an analog voltage with hysteresis rather than a digital pin.
@@ -63,7 +67,7 @@ as an analog voltage with hysteresis rather than a digital pin.
                +3.3V ─┤  1 │ 13 ├─ +3.3V
                +3.3V ─┤  2 │ 14 ├─ −12V
                  GND ─┤  3 │ 15 ├─ GND
-                 +5V ─┤  4 │ 16 ├─ PS_ON#   ◄── GPIO4  (green, open-drain, active LOW)
+                 +5V ─┤  4 │ 16 ├─ PS_ON#   ◄── PSU control GPIO (green, open-drain, active LOW)
                  GND ─┤  5 │ 17 ├─ GND      ◄── ESP GND (any GND pin works)
                  +5V ─┤  6 │ 18 ├─ GND
                  GND ─┤  7 │ 19 ├─ GND
@@ -81,7 +85,7 @@ ESP 5V/VIN ◄── +5VSB ─┤  9 │ 21 ├─ +5V
     FRAME ─┤  3   4 ├─ SMB_CLK_MAIN
   PCIRST# ─┤  5   6 ├─ SMB_DATA_MAIN
      LAD3 ─┤  7   8 ├─ LAD2
-       3V ─┤  9  10 ├─ LAD1      ◄── pin 9 (3V) = board-on sense ──► GPIO3
+       3V ─┤  9  10 ├─ LAD1      ◄── pin 9 (3V) = board-on sense ──► Board-sense GPIO
      LAD0 ─┤ 11  12 ├─ GND
           ─┤     14 ├─ S_PWRDWN#
      3VSB ─┤ 15  16 ├─ SERIRQ#
@@ -160,17 +164,25 @@ retries the broker every 20 s in the background.
 
 ## Build & flash
 
-PlatformIO (pioarduino). Two steps — firmware and the portal's web UI (a single
-`app/index.html` packed into SPIFFS):
+PlatformIO (pioarduino). Select the environment for your board. Two steps — firmware
+and the portal's web UI (a single `app/index.html` packed into SPIFFS):
 
 ```bash
-pio run -t upload     # firmware
-pio run -t uploadfs   # web UI filesystem
+pio run -e esp32-c3-devkitm-1 -t upload  # C3 firmware
+pio run -e esp32-c3-devkitm-1 -t uploadfs
+
+pio run -e esp32-wroom32 -t upload       # WROOM32 firmware
+pio run -e esp32-wroom32 -t uploadfs
 ```
+
+`esp32-wroom32` targets the generic `esp32dev` board profile. The WROOM32 pin map is
+defined separately from the C3 map in [include/board.h](include/board.h); ensure the
+physical wiring follows the matching column above.
 
 ## Notes
 
-- **WiFi TX power**: these ESP32-C3 *mini* boards have an RF/power quirk
+- **WiFi TX power**: the default `WIFI_POWER_8_5dBm` is intentionally conservative.
+  These ESP32-C3 *mini* boards have an RF/power quirk
   ([arduino-esp32 #6551](https://github.com/espressif/arduino-esp32/issues/6551)) where
   the radio is unusable at full power. Both the SoftAP (`AP_TX_POWER`) and station
   mode (`STA_TX_POWER`) therefore run at `WIFI_POWER_8_5dBm`
@@ -185,7 +197,8 @@ pio run -t uploadfs   # web UI filesystem
   [include/board.h](include/board.h)) so it doesn't starve the WiFi MAC — controller
   wake still works, it just takes a little longer to notice. With no SSID configured the
   original ~50 % duty is used unchanged.
-- Serial debug runs over USB-CDC at **115200** baud.
+- Serial debug runs at **115200** baud. C3 native USB-CDC is enabled by its build
+  environment; WROOM32 boards use their USB-UART bridge.
 - Pin assignments and all timing constants live in [include/board.h](include/board.h).
 - **Every "off" is a hard rail cut.** The controller drives `PS_ON#` directly and has
   no channel into the running OS, so the HA switch and the 5 s button hold yank power

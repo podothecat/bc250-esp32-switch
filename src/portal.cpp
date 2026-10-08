@@ -406,9 +406,8 @@ void portalBegin() {
 
   WiFi.mode(WIFI_AP);
   bool ok = WiFi.softAP(AP_SSID);  // open network
-  // These C3 mini boards have an RF/power design flaw (arduino-esp32 #6551):
-  // at full TX power the SoftAP emits no usable beacons. Lowering TX power makes
-  // it work. Must be set AFTER softAP().
+  // Keep the configured TX power consistent across targets. Must be set AFTER
+  // softAP().
   WiFi.setTxPower(AP_TX_POWER);
   Serial.printf("[PORTAL] softAP ret=%d ssid='%s' ip=%s txpwr=%d\n", ok, AP_SSID,
                 WiFi.softAPIP().toString().c_str(), WiFi.getTxPower());
@@ -417,8 +416,8 @@ void portalBegin() {
   dnsServer.start(53, "*", WiFi.softAPIP());
 
   // BLE active scan so the picker shows device names + live RSSI. Keep the duty
-  // cycle LOW (window << interval): WiFi and BLE share the C3's single radio, so
-  // a high-duty scan starves the SoftAP and its beacons never go out.
+  // cycle LOW (window << interval): WiFi and BLE share a radio, so a high-duty
+  // scan can starve the SoftAP.
   NimBLEDevice::init("");
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setScanCallbacks(&scanCallbacks, true);
