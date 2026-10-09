@@ -155,6 +155,8 @@ static void powerOff(const char *reason, unsigned long now) {
 static void controllerFound(const char *addr, const char *, int, bool classic) {
   for (uint8_t i = 0; i < config.wakeAddrCount; ++i) {
     if (strcmp(addr, config.wakeAddrs[i].c_str()) != 0) continue;
+    if (!classic && (!bleSeenEver || uint32_t(millis() - bleLastSeen) >= BLE_PRESENCE_TIMEOUT_MS))
+      Serial.printf("[BLE ] registered controller advertising: %s\n", addr);
     bleLastSeen = millis();
     bleSeenEver = true;
     if (classic) Serial.printf("[BT] registered Classic controller seen: %s\n", addr);

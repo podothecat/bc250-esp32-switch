@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-// C3 callbacks run on the Bluetooth task; WROOM callbacks run in update().
+// Advertising callbacks run on the Bluetooth task; WROOM HID callbacks run in update().
 // Copy fields before returning.
 using ControllerFound = void (*)(const char *addr, const char *name, int rssi,
                                 bool classic);

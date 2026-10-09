@@ -264,7 +264,17 @@ and save; up to four addresses are supported. Existing address registrations
 are retained, but a controller must also pair with this board to reconnect.
 Bluetooth keys are preserved across reboots and are not cleared by rescan.
 
-In normal mode, only a registered gamepad connection can trigger power-on.
+In normal mode, a BLE advertisement matching a registered address can trigger
+power-on without completing HID pairing with the ESP32. This allows BLE pads
+to wake the PC even when their current Bluetooth bond is with the PC. Registered
+Classic gamepad connections also trigger power-on. Normal mode suppresses
+Bluepad32's BLE advertising-to-HID connection handler, so BLE scanning continues
+without initiating pairing with the pad. Setup mode retains BLE HID discovery.
+The boot log identifies normal mode as `advertisements only (no BLE connections)`.
+Address changes or advertisements the ESP32 cannot receive still prevent wake.
+The existing cooldown and silence-based re-arm apply to both detection paths.
+`[BLE ] registered controller advertising` identifies this path; `[BTDIAG]`
+reports radio counters every five seconds while detection is requested.
 The gamepad is immediately disconnected, and discovery is paused while the PC
 is starting or on. Connections arriving while detection is paused are released
 without waking the PC. Setup discovery remains limited to an active picker
