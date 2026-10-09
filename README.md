@@ -283,3 +283,25 @@ PS-button wake and subsequent PC reconnection require testing with the actual
 controller; disconnecting from the board does not guarantee automatic PC pairing.
 
 Upload both WROOM firmware and the filesystem image for this update.
+
+### Remote-name response experiment (WROOM32)
+
+With BC250 off, upload `esp32-wroom32-name-probe` (firmware only). This standalone
+diagnostic reads the saved controller addresses and queries them in turn. It
+does not run the portal, WiFi, MQTT or power-button control, does not assert
+PS_ON#, and does not write application settings. BLE HID discovery, Classic
+outgoing discovery and incoming connections are blocked to avoid re-pairing.
+No PC MAC address is needed. Remote-name requests run on the BT task, one at a
+time, with a 2.56-second page timeout and a 1-second gap after completion.
+
+Keep the controller paired with the PC. Record 20 seconds with the controller
+off, then press **PS only** and record 30 seconds. Do not use Create+PS.
+`[NAMEPROBE] ... result ... status=0x00` means the addressed device answered;
+`queued_status=0x00` alone only means the request was queued. Results for the
+DualSense address must be distinguished from other saved controllers. Missing
+responses do not prove impossibility; radio timing and controller state matter.
+After the test, upload normal `esp32-wroom32` firmware to restore operation.
+
+The reported DualSense PS-only trial returned `status=0x04` (Page Timeout),
+about 2.565 seconds per request, with no successful name responses. This remains
+a diagnostic experiment, not a validated DualSense wake method.

@@ -11,3 +11,8 @@ env.Append(LIBS=["bluepad32_arduino", "bluepad32", "btstack", "bluepad32_arduino
 # without Bluepad32 stopping the scan to initiate HID pairing. Setup delegates
 # to the original handler. Do not patch the shared framework package.
 env.Append(LINKFLAGS=["-Wl,--wrap=uni_bt_le_on_gap_event_advertising_report"])
+project_flags = env.GetProjectOption("build_flags", "")
+if "BC250_NAME_PROBE" in (project_flags if isinstance(project_flags, str) else " ".join(project_flags)):
+    for symbol in ("uni_hid_device_on_device_discovered", "uni_bt_bredr_setup",
+                   "uni_bt_bredr_on_hci_remote_name_request_complete"):
+        env.Append(LINKFLAGS=["-Wl,--wrap=" + symbol])
