@@ -16,3 +16,7 @@ if "BC250_NAME_PROBE" in (project_flags if isinstance(project_flags, str) else "
     for symbol in ("uni_hid_device_on_device_discovered", "uni_bt_bredr_setup",
                    "uni_bt_bredr_on_hci_remote_name_request_complete"):
         env.Append(LINKFLAGS=["-Wl,--wrap=" + symbol])
+else:
+    for symbol in ("btstack_init", "esp_bt_controller_enable", "uni_bt_bredr_setup",
+                   "uni_bt_bredr_on_hci_connection_request"):
+        env.Append(LINKFLAGS=["-Wl,--wrap=" + symbol])

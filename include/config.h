@@ -16,6 +16,10 @@
 //   mqttUser   - broker username ("" => anonymous).
 //   mqttPass   - broker password.
 //   deviceName - friendly name shown in Home Assistant.
+//   btHost     - the BC250's Bluetooth Classic address ("" => PS-button wake off).
+//                WROOM boots with this identity while the BC250 is off.
+//   psLearn    - one-shot: the next setup boot uses btHost so PS-button pages
+//                can be registered. Cleared when that setup session starts.
 //
 // Every field is optional. A device with no WiFi and no MQTT configured must
 // behave exactly as it did before those fields existed: the button is the
@@ -36,6 +40,8 @@ struct Config {
   String   mqttUser;
   String   mqttPass;
   String   deviceName;
+  String   btHost;
+  bool     psLearn;
 };
 
 extern Config config;
@@ -56,6 +62,8 @@ void setWifiSettings(const String &ssid, const String &pass, bool wakeOnLan);
 void setMqttSettings(const String &host, uint16_t port, const String &user,
                      const String &pass);
 void setDeviceName(const String &name);
+bool setBtHost(const String &addr);  // "" clears; false on invalid input
+void setPsLearn(bool learn);
 
 // Provisioned enough to leave the setup portal: a password has been set.
 // Deliberately password-only — WiFi, MQTT and the bound controller are each

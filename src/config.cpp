@@ -25,6 +25,9 @@ static const char *K_MQTT_PORT  = "mqttPort";
 static const char *K_MQTT_USER  = "mqttUser";
 static const char *K_MQTT_PASS  = "mqttPass";
 static const char *K_DEV_NAME   = "devName";
+// Also read before Arduino starts (src/bt_host.cpp); keep the names in sync.
+static const char *K_BT_HOST    = "btHost";
+static const char *K_PS_LEARN   = "psLearn";
 
 void loadConfig() {
   prefs.begin(NS, true);  // read-only
@@ -59,6 +62,9 @@ void loadConfig() {
   config.mqttUser   = prefs.getString(K_MQTT_USER, "");
   config.mqttPass   = prefs.getString(K_MQTT_PASS, "");
   config.deviceName = prefs.getString(K_DEV_NAME, "");
+  config.btHost     = prefs.getString(K_BT_HOST, "");
+  if (!validWakeAddr(config.btHost)) config.btHost = "";
+  config.psLearn    = prefs.getBool(K_PS_LEARN, false);
   prefs.end();
 }
 
@@ -147,6 +153,23 @@ void setMqttSettings(const String &host, uint16_t port, const String &user,
 void setDeviceName(const String &name) {
   config.deviceName = name;
   putString(K_DEV_NAME, name);
+}
+
+bool setBtHost(const String &addr) {
+  String normalized = addr;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (!normalized.isEmpty() && !validWakeAddr(normalized)) return false;
+  config.btHost = normalized;
+  putString(K_BT_HOST, normalized);
+  return true;
+}
+
+void setPsLearn(bool learn) {
+  config.psLearn = learn;
+  prefs.begin(NS, false);
+  prefs.putBool(K_PS_LEARN, learn);
+  prefs.end();
 }
 
 bool isConfigured() {

@@ -5,6 +5,7 @@
 #include "config.h"
 #include "ha.h"
 #include "portal.h"
+#include "bt_host.h"
 
 // The ESP is permanently powered from the ATX connector (5VSB), so it runs
 // independently of the PSU's main rails. It controls the SFX PSU through PS_ON#
@@ -133,6 +134,10 @@ static void psuOff() {
 // the very next loop. Sharing one clock per iteration keeps the math monotonic.
 static void powerOn(const char *reason, unsigned long now) {
   Serial.printf("[ACT ] %s -> powering on\n", reason);
+  // Stop answering spoofed-identity Classic pages before the board comes up, so
+  // the ESP never competes with the real BC250 for the controller once it boots.
+  // The per-loop update below keeps it off for the whole non-OFF window.
+  btHostAllowIncoming(false);
   psuOn();
   bootStart = now;
   setState(STATE_BOOTING);
@@ -242,6 +247,9 @@ static void normalBegin() {
 #if defined(BC250_BLUEPAD32)
   setBleScanActive(state == STATE_OFF);
 #endif
+  // Report the chosen Bluetooth identity once the radio is up (spoofed vs. the
+  // "BC250 Power Setup" fallback, and why).
+  btHostLogStatus();
   haBegin();
 }
 
@@ -460,6 +468,11 @@ static void normalLoop() {
   ) {
     setBleScanActive(state == STATE_OFF);
   }
+
+  // Answer spoofed-identity Classic pages only while fully OFF with the board
+  // down. A no-op on non-Bluepad32 builds. boardRaw (not the debounced state) is
+  // used so a board coming up disables it immediately.
+  btHostAllowIncoming(state == STATE_OFF && !boardRaw);
 
   // --- Heartbeat ---
   if (now - lastHeartbeat >= HEARTBEAT_MS) {
