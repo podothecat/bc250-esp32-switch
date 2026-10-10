@@ -204,4 +204,11 @@ const unsigned long BLE_WAKE_COOLDOWN_MS = 15000;
 // Must exceed the longest gap inside the controller's reconnect burst, or the
 // latch re-arms mid-burst — watch the "[BLE ] controller seen/lost" log lines
 // to measure it. Also kept above BLE_PRESENCE_TIMEOUT_MS by construction.
-const unsigned long BLE_REARM_SILENCE_MS = 10000;
+//
+// Measured: a DualSense that loses its host while powered on keeps Classic-paging
+// the spoofed BC250 address in a decaying burst with ~5-20 s gaps. At 10 s the
+// latch re-armed inside one of those gaps and the next page powered the machine
+// straight back on after a manual power-off. 30 s rides out the active-retry gaps,
+// so the machine stays down until the controller truly gives up (or is switched
+// off) and then re-arms for the next genuine press.
+const unsigned long BLE_REARM_SILENCE_MS = 30000;
