@@ -36,10 +36,10 @@ const int BUTTON_GND   = 19;
 const int PS_ON_PIN    = 23;
 const int BOARD_SENSE  = 34;
 const int BOOT_BUTTON_PIN = 0;   // onboard BOOT button, active LOW
-// Onboard LED on a generic ESP32 DevKit (DevKitC / WROOM-32) is GPIO2, active
-// HIGH. It is a spare pin here. Change this if the board routes its LED
-// elsewhere, or set it to -1 to disable the status LED.
-const int STATUS_LED_PIN = 2;
+// Status LED on GPIO21, active HIGH: anode to the pin, cathode to GND. GPIO21 is
+// a free, non-strapping output (preferred over GPIO2, which is a boot-strapping
+// pin). Change this if you route the LED elsewhere, or set it to -1 to disable.
+const int STATUS_LED_PIN = 21;
 const bool STATUS_LED_ACTIVE_HIGH = true;
 #else
 #error "Unsupported ESP32 target: define board pin assignments in include/board.h"
