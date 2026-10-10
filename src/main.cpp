@@ -402,10 +402,11 @@ static void normalLoop() {
 
   // --- BLE controller wake ("machine follows controller") ---
   // While OFF and armed, the controller being present powers the machine on.
-  // A power-off disarms the wake; it re-arms only after the controller has been
-  // silent for BLE_REARM_SILENCE_MS, so its reconnect-advertising burst at
-  // shutdown can't wake us however long it lasts. The fixed cooldown still
-  // applies on top.
+  // A power-off disarms the wake; it re-arms once the controller is quiet, so its
+  // reconnect-advertising burst at shutdown can't wake us however long it lasts.
+  // "Quiet" is two gates (see below): a short floor from the power-off for a
+  // controller that is already off, and a longer silence-since-last-sighting for
+  // one still emitting its burst. The fixed cooldown still applies on top.
   //
   // bleLastSeen is written by the scan task and can land after `now` was taken.
   // The unsigned difference then underflows to a huge "silence", which is
@@ -422,11 +423,18 @@ static void normalLoop() {
     Serial.printf("[BLE ] controller %s\n", blePresent ? "seen" : "lost");
   }
 
-  // Silence is measured from the power-off too, not just the last sighting: with
-  // BLE_SCAN_ONLY_WHEN_OFF the scan was paused while ON, so a stale bleLastSeen
-  // would otherwise re-arm before the scan has heard the reconnect burst.
+  // Two gates, so a quiet controller re-arms fast while a noisy one still waits:
+  //   - A floor measured from the power-off (BLE_WAKE_COOLDOWN_MS). While ON the
+  //     scan is paused, so bleLastSeen is stale at power-off and the silence gate
+  //     below is already satisfied; the floor gives the resumed scan time to hear
+  //     the reconnect burst before we trust that silence. It equals the cooldown,
+  //     during which presence is inhibited anyway, so arming at its end is safe.
+  //   - Silence since the last sighting (BLE_REARM_SILENCE_MS). Once the burst
+  //     starts, each page refreshes bleLastSeen and holds the latch disarmed.
+  // A controller switched off emits no burst, so only the floor applies and it
+  // re-arms at power-off + cooldown. One left on waits out the burst gaps.
   if (!bleWakeArmed &&
-      (now - bleDisarmedAt) >= BLE_REARM_SILENCE_MS &&
+      (now - bleDisarmedAt) >= BLE_WAKE_COOLDOWN_MS &&
       (!bleSeenEver || bleSilentMs >= (int32_t)BLE_REARM_SILENCE_MS)) {
     bleWakeArmed = true;
     Serial.println("[BLE ] controller quiet -> wake re-armed");
