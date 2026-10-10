@@ -142,21 +142,25 @@ button wakes the machine again.
 Hold the button ≥ 8 s while off (or on first use) to start the portal:
 
 1. Connect to the open WiFi network **`BC250 Switch Setup`** and open `http://192.168.4.1`.
-2. Create a password.
-3. **WiFi** — pick your network from the list captured at startup, or type one in.
+2. **WiFi** — pick your network from the list captured at startup, or type one in.
    You can also enable WoL detection here; it requires a configured WiFi network.
-4. **MQTT** — your broker's host, port and credentials.
-5. **Controller** — pick it from the live BLE scan, or enter its MAC.
-6. **Finish** — name the device, review, and reboot into normal operation.
+3. **MQTT** — your broker's host, port and credentials.
+4. **Controller** — pick it from the live BLE scan, or enter its MAC.
+5. **Finish** — name the device, review, and reboot into normal operation.
 
-Only the password is required. **Every later step can be skipped**, and each is
-independent: no WiFi means the device runs exactly as it always has, on the button
+The portal has no password. The setup AP is only up on an explicit button hold and
+anyone with physical access can reflash the board anyway, so the brief, deliberate
+setup window is left open rather than gated. **Every step can be skipped**, and each
+is independent: no WiFi means the device runs exactly as it always has, on the button
 alone. Skipping just MQTT joins the network without appearing in Home Assistant.
 
 To clear something later, blank the field and save — an empty SSID disables WiFi, an
-empty broker host disables MQTT, and an empty MAC un-binds the controller. Password
-fields left blank keep whatever is already stored; clear one and save to remove it.
-Clearing the WiFi network also disables WoL detection.
+empty broker host disables MQTT, and an empty MAC un-binds the controller. Clearing
+the WiFi network also disables WoL detection.
+
+To hand the board to someone else, use **Factory reset** on the WiFi screen (or hold
+the main switch and the BOOT button together for 15 s while off): it erases every
+stored setting and reboots into a fresh setup portal.
 
 When enabled, WoL listens for UDP packets on port 9 containing the standard magic
 packet pattern (six `FF` bytes followed by the target MAC repeated 16 times). The

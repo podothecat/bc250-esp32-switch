@@ -15,7 +15,6 @@ static const char *NS = "bc250";
 // the struct field names ("devName" vs deviceName). Keep them here, once.
 static const char *K_WAKE_ADDR  = "wakeAddr";
 static const char *K_WAKE_ADDRS = "wakeAddrs";
-static const char *K_PASS_HASH  = "passHash";
 static const char *K_FORCE_SETUP = "forceSetup";
 static const char *K_WIFI_SSID  = "wifiSsid";
 static const char *K_WIFI_PASS  = "wifiPass";
@@ -52,7 +51,6 @@ void loadConfig() {
     stored = stored.substring(comma + 1);
   }
   config.wakeAddr = config.wakeAddrCount ? config.wakeAddrs[0] : "";
-  config.passHash   = prefs.getString(K_PASS_HASH, "");
   config.forceSetup = prefs.getBool(K_FORCE_SETUP, false);
   config.wifiSsid   = prefs.getString(K_WIFI_SSID, "");
   config.wifiPass   = prefs.getString(K_WIFI_PASS, "");
@@ -113,11 +111,6 @@ bool setWakeAddrs(const String *addrs, uint8_t count) {
   return true;
 }
 
-void setPassHash(const String &hash) {
-  config.passHash = hash;
-  putString(K_PASS_HASH, hash);
-}
-
 void setForceSetup(bool force) {
   config.forceSetup = force;
   prefs.begin(NS, false);
@@ -172,8 +165,16 @@ void setPsLearn(bool learn) {
   prefs.end();
 }
 
-bool isConfigured() {
-  return config.passHash.length() > 0;
+void factoryReset() {
+  // Wipe every stored value so the board can be handed on clean: WiFi, portal
+  // password, MQTT, bound controllers and the spoofed BC250 host all live in
+  // this one NVS namespace (raw-NVS keys set by bt_host.cpp included), so a
+  // single clear() removes the lot. Arm the setup portal for the next boot so
+  // the new owner lands straight in it. The caller is expected to reboot.
+  prefs.begin(NS, false);
+  prefs.clear();
+  prefs.end();
+  setForceSetup(true);
 }
 
 bool wifiConfigured() {

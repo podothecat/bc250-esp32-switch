@@ -9,21 +9,13 @@
 #include <ESPAsyncWebServer.h>
 #include "controller_scan.h"
 #include <esp_mac.h>
-#include <esp_random.h>
-#include "mbedtls/sha256.h"
 
 #include "board.h"
 #include "config.h"
 #include "bt_host.h"
 
-static const size_t MIN_PASSWORD_LEN = 6;
-
 static DNSServer       dnsServer;
 static AsyncWebServer  server(80);
-
-// Single-session bearer token, handed out on password set / login and required
-// by the protected endpoints. Regenerated each set/login; "" means no session.
-static String          g_token;
 
 // Deferred restart (so the HTTP response can flush before we reboot).
 static unsigned long   g_restartAt = 0;
@@ -116,28 +108,6 @@ static void setupControllerFound(const char *addr, const char *name, int rssi,
 
 // --- Helpers ---
 
-static String sha256hex(const String &s) {
-  uint8_t out[32];
-  mbedtls_sha256((const unsigned char *)s.c_str(), s.length(), out, 0);
-  char hex[65];
-  for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", out[i]);
-  hex[64] = 0;
-  return String(hex);
-}
-
-static String makeToken() {
-  char buf[33];
-  for (int i = 0; i < 4; i++) sprintf(buf + i * 8, "%08x", (unsigned)esp_random());
-  buf[32] = 0;
-  return String(buf);
-}
-
-static bool authed(AsyncWebServerRequest *req) {
-  if (g_token.isEmpty()) return false;
-  if (!req->hasHeader("X-Auth-Token")) return false;
-  return req->header("X-Auth-Token") == g_token;
-}
-
 static void sendJsonError(AsyncWebServerRequest *req, int code, const char *msg) {
   JsonDocument doc;
   doc["error"] = msg;
@@ -220,11 +190,9 @@ static bool readPortalBoardSense() {
 
 static void handleStatus(AsyncWebServerRequest *req) {
   JsonDocument doc;
-  doc["passwordSet"] = config.passHash.length() > 0;
   doc["wakeAddr"]    = config.wakeAddr;
   JsonArray addrs = doc["wakeAddrs"].to<JsonArray>();
   for (uint8_t i = 0; i < config.wakeAddrCount; ++i) addrs.add(config.wakeAddrs[i]);
-  doc["configured"]  = isConfigured();
   doc["psSession"]   = g_psSession;
   doc["classicSupported"] = controllerScanStatus().classicSupported;
   String out;
@@ -236,7 +204,6 @@ static void handleStatus(AsyncWebServerRequest *req) {
 // exposes the network the device is joined to and the broker it talks to.
 // Passwords are NEVER returned — only whether one is stored.
 static void handleGetSettings(AsyncWebServerRequest *req) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   uint8_t mac[6];
   esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
   if (err != ESP_OK) {
@@ -267,7 +234,6 @@ static void handleGetSettings(AsyncWebServerRequest *req) {
 }
 
 static void handleWifiScan(AsyncWebServerRequest *req) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonDocument doc;
   JsonArray arr = doc["networks"].to<JsonArray>();
   for (int i = 0; i < netCount; i++) {
@@ -296,7 +262,6 @@ static bool keyPresent(JsonObject o, const char *key) {
 }
 
 static void handleWifi(AsyncWebServerRequest *req, JsonVariant &json) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonObject o = json.as<JsonObject>();
   String ssid = o["ssid"] | "";
   ssid.trim();
@@ -324,7 +289,6 @@ static void handleWifi(AsyncWebServerRequest *req, JsonVariant &json) {
 }
 
 static void handleMqtt(AsyncWebServerRequest *req, JsonVariant &json) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonObject o = json.as<JsonObject>();
   String host = o["host"] | "";
   host.trim();
@@ -352,7 +316,6 @@ static void handleMqtt(AsyncWebServerRequest *req, JsonVariant &json) {
 }
 
 static void handleDevice(AsyncWebServerRequest *req, JsonVariant &json) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonObject o = json.as<JsonObject>();
   String name = o["name"] | "";
   name.trim();
@@ -363,50 +326,7 @@ static void handleDevice(AsyncWebServerRequest *req, JsonVariant &json) {
   req->send(200, "application/json", "{\"ok\":true}");
 }
 
-static void handlePassword(AsyncWebServerRequest *req, JsonVariant &json) {
-  JsonObject o = json.as<JsonObject>();
-  String pw = o["password"] | "";
-  if (pw.length() < MIN_PASSWORD_LEN) {
-    sendJsonError(req, 400, "password too short");
-    return;
-  }
-  // Setting the first password is open; changing an existing one needs a session.
-  if (config.passHash.length() > 0 && !authed(req)) {
-    sendJsonError(req, 401, "unauthorized");
-    return;
-  }
-  setPassHash(sha256hex(pw));
-  g_token = makeToken();
-  Serial.println("[PORTAL] password set");
-
-  JsonDocument doc;
-  doc["token"] = g_token;
-  String out;
-  serializeJson(doc, out);
-  req->send(200, "application/json", out);
-}
-
-static void handleLogin(AsyncWebServerRequest *req, JsonVariant &json) {
-  if (config.passHash.isEmpty()) {
-    sendJsonError(req, 400, "no password set");
-    return;
-  }
-  JsonObject o = json.as<JsonObject>();
-  String pw = o["password"] | "";
-  if (sha256hex(pw) != config.passHash) {
-    sendJsonError(req, 401, "wrong password");
-    return;
-  }
-  g_token = makeToken();
-  JsonDocument doc;
-  doc["token"] = g_token;
-  String out;
-  serializeJson(doc, out);
-  req->send(200, "application/json", out);
-}
-
 static void handleBleDevices(AsyncWebServerRequest *req) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
 
   // Snapshot under the lock, then build JSON without holding it.
   BleDev snap[MAX_DEVS];
@@ -455,7 +375,6 @@ static void handleBleDevices(AsyncWebServerRequest *req) {
 }
 
 static void handleBleRescan(AsyncWebServerRequest *req) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   portENTER_CRITICAL(&devsMux);
   bleRescanRequested = true;
   blePickerRequested = true;
@@ -524,7 +443,6 @@ static void servicePortalBleScan() {
 }
 
 static void handleBleSelect(AsyncWebServerRequest *req, JsonVariant &json) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonObject o = json.as<JsonObject>();
   String addrs[MAX_WAKE_CONTROLLERS];
   uint8_t count = 0;
@@ -572,7 +490,6 @@ static void handleBleSelect(AsyncWebServerRequest *req, JsonVariant &json) {
 // alive) the BC250 discovery window, so "BC250 Power Setup" only shows in Steam
 // while this screen is polling.
 static void handleHost(AsyncWebServerRequest *req) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   if (req->hasParam("learn") && req->getParam("learn")->value() == "1") {
     portENTER_CRITICAL(&hostMux);
     g_hostLearnRequested = true;
@@ -598,7 +515,6 @@ static void handleHost(AsyncWebServerRequest *req) {
 // POST /api/host/power {on} — assert or release PS_ON# so the BC250 can be
 // powered on from the setup screen (setup mode keeps it released otherwise).
 static void handleHostPower(AsyncWebServerRequest *req, JsonVariant &json) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonObject o = json.as<JsonObject>();
   bool on = o["on"] | false;
   digitalWrite(PS_ON_PIN, on ? PS_ON_ASSERT : PS_ON_RELEASE);
@@ -609,7 +525,6 @@ static void handleHostPower(AsyncWebServerRequest *req, JsonVariant &json) {
 
 // POST /api/host/select {addr} — save the learned BC250 address (""" clears).
 static void handleHostSelect(AsyncWebServerRequest *req, JsonVariant &json) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   JsonObject o = json.as<JsonObject>();
   String addr = o["addr"] | "";
   addr.trim();
@@ -624,7 +539,6 @@ static void handleHostSelect(AsyncWebServerRequest *req, JsonVariant &json) {
 // POST /api/host/controller-step — reboot into a spoofed session so PS-button
 // pages can be registered. Requires a saved BC250 and the board powered down.
 static void handleHostControllerStep(AsyncWebServerRequest *req) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   if (config.btHost.isEmpty()) { sendJsonError(req, 409, "save the BC250 first"); return; }
   if (g_boardUp) { sendJsonError(req, 409, "turn the BC250 off first"); return; }
   setPsLearn(true);
@@ -636,11 +550,18 @@ static void handleHostControllerStep(AsyncWebServerRequest *req) {
 }
 
 static void handleFinish(AsyncWebServerRequest *req) {
-  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
-  if (!isConfigured()) { sendJsonError(req, 400, "not fully configured"); return; }
   setForceSetup(false);
   req->send(200, "application/json", "{\"ok\":true}");
   Serial.println("[PORTAL] setup complete, restarting into normal mode");
+  g_restartAt = millis() + 800;
+}
+
+// POST /api/factory-reset — wipe every stored setting and reboot into a fresh
+// setup portal, for handing the board to someone else.
+static void handleFactoryReset(AsyncWebServerRequest *req) {
+  factoryReset();
+  req->send(200, "application/json", "{\"ok\":true}");
+  Serial.println("[PORTAL] factory reset requested; wiping settings and rebooting");
   g_restartAt = millis() + 800;
 }
 
@@ -699,9 +620,10 @@ void portalBegin() {
   bleLastScanAttempt = millis() - BLE_SCAN_RETRY_MS;
   Serial.println("[PORTAL] Bluetooth deferred until controller picker opens");
 
-  // /api/status is deliberately unauthenticated (the UI needs it before login)
-  // and already leaks wakeAddr. Everything below is authed — don't extend the
-  // unauthenticated surface with network names or broker addresses.
+  // The portal has no password: the setup AP is only up on an explicit button
+  // request, and anyone with physical access can reflash anyway, so every
+  // endpoint is open. Keep it that way only because the AP exposure window is
+  // short and deliberate.
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/settings", HTTP_GET, handleGetSettings);
   server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
@@ -710,8 +632,7 @@ void portalBegin() {
   server.on("/api/host", HTTP_GET, handleHost);
   server.on("/api/host/controller-step", HTTP_POST, handleHostControllerStep);
   server.on("/api/finish", HTTP_POST, handleFinish);
-  server.addHandler(new AsyncCallbackJsonWebHandler("/api/password", handlePassword));
-  server.addHandler(new AsyncCallbackJsonWebHandler("/api/login", handleLogin));
+  server.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/wifi", handleWifi));
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/mqtt", handleMqtt));
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/device", handleDevice));

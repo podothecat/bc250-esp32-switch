@@ -6,7 +6,6 @@
 //
 //   wakeAddrs  - up to four bound Bluetooth MACs, lower-case colon form ("aa:bb:..").
 //   wakeAddr   - first bound MAC, retained for single-controller compatibility.
-//   passHash   - SHA-256 hex of the portal password ("" => not set yet).
 //   forceSetup - request that the next boot enters the WiFi setup portal.
 //   wifiSsid   - station-mode SSID ("" => WiFi disabled, AP-only at setup).
 //   wifiPass   - station-mode passphrase ("" => open network).
@@ -30,7 +29,6 @@ struct Config {
   String   wakeAddr;  // first address, retained for older portal clients
   String   wakeAddrs[MAX_WAKE_CONTROLLERS];
   uint8_t  wakeAddrCount;
-  String   passHash;
   bool     forceSetup;
   String   wifiSsid;
   String   wifiPass;
@@ -53,7 +51,6 @@ void loadConfig();
 
 bool validWakeAddr(const String &addr);
 bool setWakeAddrs(const String *addrs, uint8_t count);
-void setPassHash(const String &hash);
 void setForceSetup(bool force);
 
 // Grouped setters. Each writes all of its keys in a single NVS transaction —
@@ -65,10 +62,10 @@ void setDeviceName(const String &name);
 bool setBtHost(const String &addr);  // "" clears; false on invalid input
 void setPsLearn(bool learn);
 
-// Provisioned enough to leave the setup portal: a password has been set.
-// Deliberately password-only — WiFi, MQTT and the bound controller are each
-// independently skippable, and nothing in setup() consults this.
-bool isConfigured();
+// Erase all stored settings and arm the setup portal for the next boot. The
+// caller must reboot afterwards. Used by the portal's factory-reset endpoint and
+// the physical button combo to hand the board on clean.
+void factoryReset();
 
 bool wifiConfigured();  // an SSID is set
 bool mqttConfigured();  // wifiConfigured() and a broker host is set

@@ -40,6 +40,8 @@
     .title { font-size:15px; font-weight:bold; }
     .steps { color:var(--muted); font-size:11px; letter-spacing:1px; margin-bottom:10px; }
     .hint { color:var(--muted); font-size:11px; margin-top:6px; }
+    .reset-zone { margin-top:22px; padding-top:16px; border-top:1px solid var(--accent2); }
+    #reset-confirm-btn { background:var(--err); color:#fff; }
     .summary { font-size:13px; line-height:1.7; margin-top:10px; }
     .summary .k { color:var(--muted); }
   </style>
@@ -49,21 +51,7 @@
     <h1>BC250 Switch</h1>
     <div class="sub" id="subtitle">Setup portal</div>
 
-    <!-- 1. Password -->
-    <div class="card hidden" id="screen-pass">
-      <div class="steps" id="steps-pass"></div>
-      <div class="title" id="pass-title"></div>
-      <label for="pw">Password</label>
-      <input id="pw" type="password" autocomplete="new-password" />
-      <div id="confirm-wrap">
-        <label for="pw2">Confirm password</label>
-        <input id="pw2" type="password" autocomplete="new-password" />
-      </div>
-      <button id="pass-btn">Continue</button>
-      <div class="msg" id="pass-msg"></div>
-    </div>
-
-    <!-- 2. WiFi -->
+    <!-- 1. WiFi -->
     <div class="card hidden" id="screen-wifi">
       <div class="steps" id="steps-wifi"></div>
       <div class="title">Join a WiFi network</div>
@@ -90,9 +78,20 @@
         <button class="secondary" data-skip>Skip</button>
       </div>
       <div class="msg" id="wifi-msg"></div>
+      <div class="reset-zone" id="reset-zone">
+        <button class="secondary" id="reset-btn">Factory reset…</button>
+        <div class="hidden" id="reset-confirm">
+          <p class="hint">Erase every stored setting — WiFi, bound controllers
+          and the BC250 address — and reboot into a fresh setup. For handing the
+          board to someone else.</p>
+          <button id="reset-confirm-btn">Erase everything &amp; reboot</button>
+          <button class="secondary" id="reset-cancel-btn">Cancel</button>
+        </div>
+        <div class="msg" id="reset-msg"></div>
+      </div>
     </div>
 
-    <!-- 3. MQTT -->
+    <!-- 2. MQTT -->
     <div class="card hidden" id="screen-mqtt">
       <div class="steps" id="steps-mqtt"></div>
       <div class="title">Home Assistant broker</div>
@@ -116,7 +115,7 @@
       <div class="msg" id="mqtt-msg"></div>
     </div>
 
-    <!-- 4. PlayStation wake -->
+    <!-- 3. PlayStation wake -->
     <div class="card hidden" id="screen-ps">
       <div class="steps" id="steps-ps"></div>
       <div class="title">Controller wake</div>
@@ -168,7 +167,7 @@
       <div class="msg" id="ps-msg"></div>
     </div>
 
-    <!-- 5. Controller -->
+    <!-- 4. Controller -->
     <div class="card hidden" id="screen-dev">
       <div class="steps" id="steps-dev"></div>
       <div class="title">Select up to 4 controllers</div>
@@ -205,9 +204,8 @@
   </div>
 
   <script>
-    const SCREENS = ["pass", "wifi", "mqtt", "ps", "dev", "done"];
-    let current = "pass";
-    let token = null;
+    const SCREENS = ["wifi", "mqtt", "ps", "dev", "done"];
+    let current = "wifi";
     let selected = [];       // up to four controller MACs
     let pollTimer = null;
     let devPollBusy = false;
@@ -222,7 +220,6 @@
     async function api(path, method = "GET", body = null) {
       const headers = {};
       if (body) headers["Content-Type"] = "application/json";
-      if (token) headers["X-Auth-Token"] = token;
       const res = await fetch(path, {
         method, headers, body: body ? JSON.stringify(body) : undefined,
       });
@@ -240,10 +237,9 @@
       }
       const i = SCREENS.indexOf(name);
       $("steps-" + name).textContent = "STEP " + (i + 1) + " OF " + SCREENS.length;
-      // Back off the first settings screen would mean re-entering the password,
-      // which just re-POSTs it for no gain. Hide it there.
+      // Hide "Back" on the first screen — there is nothing before it.
       const back = $("screen-" + name).querySelector("[data-back]");
-      if (back) back.classList.toggle("hidden", i <= 1);
+      if (back) back.classList.toggle("hidden", i <= 0);
       if (name === "dev") startDevPoll(); else stopDevPoll();
       if (name === "ps") startHostPoll(); else stopHostPoll();
       if (name === "done") renderSummary();
@@ -287,40 +283,6 @@
       el.append(nm, rs);
       return el;
     }
-
-    // --- 1. Password ---
-    let creating = true;
-    function initPassScreen(passwordSet) {
-      creating = !passwordSet;
-      $("pass-title").textContent = creating ? "Create a portal password" : "Enter portal password";
-      $("confirm-wrap").classList.toggle("hidden", !creating);
-      $("pass-btn").textContent = creating ? "Create & continue" : "Unlock";
-      show("pass");
-    }
-
-    $("pass-btn").onclick = async () => {
-      const pw = $("pw").value;
-      const msg = $("pass-msg");
-      msg.className = "msg";
-      if (creating) {
-        if (pw.length < 6) { msg.className = "msg err"; msg.textContent = "Min 6 characters."; return; }
-        if (pw !== $("pw2").value) { msg.className = "msg err"; msg.textContent = "Passwords don't match."; return; }
-      }
-      try {
-        $("pass-btn").disabled = true;
-        const path = creating ? "/api/password" : "/api/login";
-        const data = await api(path, "POST", { password: pw });
-        token = data.token;
-        await loadSettings();
-        // A spoofed controller-learning session goes straight to the picker: the
-        // user only needs to press PS buttons and save.
-        if (psSession) show("dev"); else goNext();
-      } catch (e) {
-        msg.className = "msg err"; msg.textContent = e.message;
-      } finally {
-        $("pass-btn").disabled = false;
-      }
-    };
 
     // Prefill every later screen from the device's stored settings. Passwords are
     // never returned, only the *Set booleans — see the sentinel note below.
@@ -695,6 +657,29 @@
       }
     };
 
+    $("reset-btn").onclick = () => {
+      $("reset-btn").classList.add("hidden");
+      $("reset-confirm").classList.remove("hidden");
+    };
+    $("reset-cancel-btn").onclick = () => {
+      $("reset-confirm").classList.add("hidden");
+      $("reset-btn").classList.remove("hidden");
+      const m = $("reset-msg"); m.className = "msg"; m.textContent = "";
+    };
+    $("reset-confirm-btn").onclick = async () => {
+      const msg = $("reset-msg");
+      msg.className = "msg";
+      try {
+        $("reset-confirm-btn").disabled = true;
+        await api("/api/factory-reset", "POST", {});
+        msg.className = "msg ok";
+        msg.textContent = "Erased. Rebooting into fresh setup…";
+      } catch (e) {
+        msg.className = "msg err"; msg.textContent = e.message;
+        $("reset-confirm-btn").disabled = false;
+      }
+    };
+
     // --- Boot ---
     (async () => {
       try {
@@ -722,7 +707,9 @@
           $("subtitle").textContent = "Controller learning session — press each PS button";
         else if (bound.length)
           $("subtitle").textContent = "Currently bound: " + bound.join(", ");
-        initPassScreen(st.passwordSet);
+        await loadSettings();
+        // A spoofed controller-learning session goes straight to the picker.
+        show(psSession ? "dev" : SCREENS[0]);
       } catch (e) {
         $("subtitle").textContent = "Cannot reach device: " + e.message;
       }

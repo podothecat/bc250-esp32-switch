@@ -90,6 +90,12 @@ const unsigned long LONG_PRESS_MS = 5000;
 // presses that begin while OFF, so it never collides with force-off.
 const unsigned long SETUP_HOLD_MS = 8000;
 
+// Hold the main switch and the BOOT button together while OFF for this long to
+// factory-reset (wipe all settings, reboot into a fresh setup portal). Longer
+// than SETUP_HOLD_MS so the single-button setup holds resolve first when only one
+// button is down. Only effective on targets that expose BOOT_BUTTON_PIN.
+const unsigned long FACTORY_RESET_HOLD_MS = 15000;
+
 // TPMS1 must stay LOW continuously for this long before we treat the board as
 // having shut itself down. Filters out brief dips/transients during boot/reset.
 const unsigned long BOARD_OFF_DEBOUNCE_MS = 1500;

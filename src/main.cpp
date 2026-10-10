@@ -358,7 +358,7 @@ static void normalLoop() {
     }
     // Cancel if the machine starts during the hold; release before retrying.
     if (state != STATE_OFF || boardRaw) bootButtonArmed = false;
-    if (bootButtonStable && bootButtonArmed &&
+    if (bootButtonStable && bootButtonArmed && !buttonStable &&
         (now - bootButtonPressStart) >= SETUP_HOLD_MS) {
       bootButtonArmed = false;
       enterSetupMode("BOOT hold (>8s) while OFF");
@@ -387,9 +387,11 @@ static void normalLoop() {
   }
 
   // --- Button holds ---
-  if (buttonStable && pressStartedOff && !setupFired &&
+  bool bootHeld = BOOT_BUTTON_PIN >= 0 && bootButtonStable;
+  if (buttonStable && pressStartedOff && !setupFired && !bootHeld &&
       (now - pressStart) >= SETUP_HOLD_MS) {
-    // Long hold from OFF -> reconfigure (does not power the machine on).
+    // Long hold from OFF -> reconfigure (does not power the machine on). Skipped
+    // while BOOT is also held: that combination is the factory-reset gesture.
     setupFired = true;
     enterSetupMode("long hold (>8s) while OFF");
   }
@@ -398,6 +400,29 @@ static void normalLoop() {
     // Long hold that began while ON -> force off.
     longPressFired = true;
     powerOff("long press (>5s) while ON", now);
+  }
+
+  // --- Factory reset: main button + BOOT held together while OFF ---
+  // Wipes all settings and reboots into a fresh setup portal, for handing the
+  // board to someone else. Held longer than either single-button setup hold, and
+  // both single setup holds are suppressed above while both buttons are down, so
+  // the two gestures never collide.
+  static unsigned long resetComboStart = 0;
+  static bool resetComboFired = false;
+  if (buttonStable && bootHeld && state == STATE_OFF && !boardRaw) {
+    if (resetComboStart == 0) {
+      resetComboStart = now;
+    } else if (!resetComboFired &&
+               (now - resetComboStart) >= FACTORY_RESET_HOLD_MS) {
+      resetComboFired = true;
+      Serial.println("[ACT ] button + BOOT held while OFF -> factory reset");
+      factoryReset();
+      delay(50);
+      ESP.restart();
+    }
+  } else {
+    resetComboStart = 0;
+    resetComboFired = false;
   }
 
   // --- BLE controller wake ("machine follows controller") ---
