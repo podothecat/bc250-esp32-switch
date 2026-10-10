@@ -293,6 +293,11 @@ void setup() {
   esp_reset_reason_t rr = esp_reset_reason();
   Serial.printf("[INIT] reset reason: %s (%d)\n", resetReasonName(rr), (int)rr);
 
+  if (STATUS_LED_PIN >= 0) {
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_PIN, STATUS_LED_ACTIVE_HIGH ? LOW : HIGH);
+  }
+
   loadConfig();
 
   // The portal only starts on an explicit request (8s button hold while OFF).
@@ -540,10 +545,36 @@ static void serialTestLoop() {
 }
 #endif
 
+// Drive the onboard status LED so the current mode is readable at a glance,
+// without a serial console. Non-blocking: the pattern is derived from the
+// wall clock each loop. Distinct patterns:
+//   setup portal   - fast blink (~3 Hz): the setup AP is up, connect to it
+//   board ON       - solid on: the BC250 is running
+//   board BOOTING  - fast flicker: PSU asserted, waiting for the board
+//   OFF, armed     - a brief pulse every 2 s: idle and ready to wake
+//   OFF, disarmed  - dark: wake is inhibited (just powered off / cooldown)
+static void updateStatusLed(unsigned long now) {
+  if (STATUS_LED_PIN < 0) return;
+  bool on;
+  if (g_setupMode) {
+    on = (now % 300) < 150;             // setup portal: fast blink
+  } else if (state == STATE_ON) {
+    on = true;                          // board up: solid
+  } else if (state == STATE_BOOTING) {
+    on = (now % 160) < 80;              // powering up: fast flicker
+  } else {  // STATE_OFF
+    // Disarmed (just powered off, holding until the controller goes quiet and
+    // the wake re-arms): slow blink. Armed idle standby: dark.
+    on = bleWakeArmed ? false : ((now % 1500) < 750);
+  }
+  digitalWrite(STATUS_LED_PIN, (on == STATUS_LED_ACTIVE_HIGH) ? HIGH : LOW);
+}
+
 void loop() {
 #if defined(BC250_SERIAL_TEST)
   serialTestLoop();
 #endif
+  updateStatusLed(millis());
   if (g_setupMode) {
     portalLoop();
     return;

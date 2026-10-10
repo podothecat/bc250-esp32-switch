@@ -43,13 +43,26 @@ The ESP is permanently powered from the ATX connector's **5 V standby**, so it r
 whether the machine is on or off. Share a common ground between the ESP, the PSU, and
 the board.
 
-| Signal | ESP32-C3 DevKitM-1 | ESP32-WROOM-32 Dev Module | Connects to | Notes |
+### GPIO pin mapping
+
+These are **GPIO numbers**, not physical header pin numbers. The firmware definitions
+are in [include/board.h](include/board.h).
+
+| Signal / firmware constant | ESP32-C3 DevKitM-1 | ESP32-WROOM-32 Dev Module | Connects to | Notes |
 |--------|-------------------|-----------------------------|-------------|-------|
-| Button sense | GPIO5 | GPIO18 | Momentary switch, terminal A | Read with internal pull-up |
-| Button ground | GPIO6 | GPIO19 | Momentary switch, terminal B | Driven LOW as the switch's ground |
-| PSU control | GPIO4 | GPIO23 | ATX `PS_ON#` (green wire) | **Open-drain**, active LOW |
-| Board sense | GPIO3 | GPIO34 | BC250 `TPMS1` (pin 9) | ~3.3 V when the board is up, 0 when off |
-| Power / ground | 5V / GND | Dev board 5V/VIN / GND | PSU standby + common ground | Permanent power for the ESP |
+| Button sense (`BUTTON_SENSE`) | GPIO5 | GPIO18 | Momentary switch, terminal A | Read with internal pull-up |
+| Button ground (`BUTTON_GND`) | GPIO6 | GPIO19 | Momentary switch, terminal B | Driven LOW as the switch's ground |
+| PSU control (`PS_ON_PIN`) | GPIO4 | GPIO23 | ATX 24-pin connector pin 16, `PS_ON#` (green wire) | **Open-drain**, active LOW |
+| Board sense (`BOARD_SENSE`) | GPIO3 | GPIO34 | BC250 `TPMS1` pin 9 | ~3.3 V when the board is up, 0 when off |
+| Setup shortcut (`BOOT_BUTTON_PIN`) | Disabled (`-1`) | GPIO0 | Onboard BOOT button | Active LOW; hold 8 s while the BC250 is off |
+| Status LED (`STATUS_LED_PIN`) | Disabled (`-1`) | GPIO2 | Status LED, if fitted on this GPIO | Active HIGH; adjust for your development board |
+| ESP power | 5V | Dev board 5V/VIN | ATX 24-pin connector pin 9, `+5VSB` | Permanent standby power for the ESP |
+| Common ground | GND | GND | ATX GND, e.g. pin 17 | Shared by ESP, PSU and BC250 |
+
+For WROOM32, wire the external push-button **between GPIO18 and GPIO19**.
+The C3 equivalent is **GPIO5 and GPIO6**. The C3's addressable onboard LED is
+not driven by the status LED code. If your WROOM32 board has no LED on GPIO2,
+change `STATUS_LED_PIN` in `include/board.h`, or set it to `-1` to disable it.
 
 Use the board-specific pins in the table; do not wire both columns at once. GPIO34 on
 the WROOM32 is input-only and is used for the ADC sense signal. `PS_ON#` idles at ~5 V

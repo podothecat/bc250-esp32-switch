@@ -20,6 +20,11 @@ const int BUTTON_GND   = 6;
 const int PS_ON_PIN    = 4;
 const int BOARD_SENSE  = 3;
 const int BOOT_BUTTON_PIN = -1;  // WROOM-only portal shortcut
+// The DevKitM's user LED is an addressable WS2812, not a plain GPIO, so the
+// simple on/off status LED is disabled here (-1). Point it at a spare GPIO
+// wired to a discrete LED to enable it.
+const int STATUS_LED_PIN = -1;
+const bool STATUS_LED_ACTIVE_HIGH = true;
 #elif defined(CONFIG_IDF_TARGET_ESP32)
 //   ESP32-WROOM-32                 External
 //   GPIO18 (BUTTON_SENSE) <------> momentary switch terminal A
@@ -31,6 +36,11 @@ const int BUTTON_GND   = 19;
 const int PS_ON_PIN    = 23;
 const int BOARD_SENSE  = 34;
 const int BOOT_BUTTON_PIN = 0;   // onboard BOOT button, active LOW
+// Onboard LED on a generic ESP32 DevKit (DevKitC / WROOM-32) is GPIO2, active
+// HIGH. It is a spare pin here. Change this if the board routes its LED
+// elsewhere, or set it to -1 to disable the status LED.
+const int STATUS_LED_PIN = 2;
+const bool STATUS_LED_ACTIVE_HIGH = true;
 #else
 #error "Unsupported ESP32 target: define board pin assignments in include/board.h"
 #endif
