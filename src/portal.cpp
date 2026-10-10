@@ -765,10 +765,12 @@ void portalLoop() {
   servicePortalBleScan();
 
   // Button held in setup mode = escape back to normal mode (only useful once
-  // configured; an unconfigured device just re-enters setup).
+  // configured; an unconfigured device just re-enters setup). Either the main
+  // power switch or the onboard BOOT button (where present) works.
   static unsigned long pressStart = 0;
   static bool wasDown = false;
-  bool down = (digitalRead(BUTTON_SENSE) == LOW);
+  bool down = (digitalRead(BUTTON_SENSE) == LOW) ||
+              (BOOT_BUTTON_PIN >= 0 && digitalRead(BOOT_BUTTON_PIN) == LOW);
   if (down && !wasDown) {
     pressStart = millis();
   } else if (down && (millis() - pressStart) >= SETUP_HOLD_MS) {
