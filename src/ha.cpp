@@ -224,6 +224,17 @@ static void serviceWakeOnLan(bool wifiConnected, unsigned long now) {
     return;
   }
 
+  // Only our own WiFi station MAC wakes us. Without this, any magic packet on the
+  // LAN (one meant for another host) would power the BC250 on. esp_read_mac()
+  // returns the station MAC regardless of whether WiFi has been started.
+  uint8_t ownMac[6];
+  esp_read_mac(ownMac, ESP_MAC_WIFI_STA);
+  if (memcmp(packet + 6, ownMac, 6) != 0) {
+    Serial.printf("[WOL ] ignoring magic packet for %02x:%02x:%02x:%02x:%02x:%02x\n",
+                  packet[6], packet[7], packet[8], packet[9], packet[10], packet[11]);
+    return;
+  }
+
   Serial.printf("[WOL ] magic packet received for %02x:%02x:%02x:%02x:%02x:%02x\n",
                 packet[6], packet[7], packet[8], packet[9], packet[10], packet[11]);
   if (g_pending == HA_CMD_NONE) g_pending = HA_CMD_WOL_POWER_ON;
