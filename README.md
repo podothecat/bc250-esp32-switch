@@ -256,31 +256,48 @@ into the bounded cache without retaining a second results list.
 
 WROOM32 uses the official Bluepad32 4.1.0 Arduino package (Arduino 2.0.17)
 with PlatformIO espressif32 6.9.0. C3 retains its Arduino 3 / NimBLE build.
-WROOM reports ready gamepad connections rather than raw inquiry results.
 
-Open the controller picker, then hold **PS + Create** on DualSense or
-**PS + SHARE** on DualShock 4 until the light bar flashes. Select the gamepad
-and save; up to four addresses are supported. Existing address registrations
-are retained, but a controller must also pair with this board to reconnect.
-Bluetooth keys are preserved across reboots and are not cleared by rescan.
+A DualSense or DualShock 4 woken with the PS button alone does not advertise
+or answer inquiries: it pages the single host it is bonded with. To wake the
+BC250 from that page without ever re-pairing the controller, the ESP32 boots
+with the BC250's own Bluetooth Classic address while the BC250 is off, and
+answers the controller's page. Every incoming Classic connection is rejected
+before authentication, so the controller's bond with the BC250 is untouched —
+only the page (which carries the controller's address) is used, as a wake.
 
-In normal mode, a BLE advertisement matching a registered address can trigger
-power-on without completing HID pairing with the ESP32. This allows BLE pads
-to wake the PC even when their current Bluetooth bond is with the PC. Registered
-Classic gamepad connections also trigger power-on. Normal mode suppresses
-Bluepad32's BLE advertising-to-HID connection handler, so BLE scanning continues
-without initiating pairing with the pad. Setup mode retains BLE HID discovery.
-The boot log identifies normal mode as `advertisements only (no BLE connections)`.
-Address changes or advertisements the ESP32 cannot receive still prevent wake.
-The existing cooldown and silence-based re-arm apply to both detection paths.
-`[BLE ] registered controller advertising` identifies this path; `[BTDIAG]`
-reports radio counters every five seconds while detection is requested.
-The gamepad is immediately disconnected, and discovery is paused while the PC
-is starting or on. Connections arriving while detection is paused are released
-without waking the PC. Setup discovery remains limited to an active picker
-with a connected Wi-Fi client. RSSI is unavailable for HID connection events.
-PS-button wake and subsequent PC reconnection require testing with the actual
-controller; disconnecting from the board does not guarantee automatic PC pairing.
+This needs the BC250's Bluetooth address, and then the controllers' addresses,
+both learned through the setup portal with no console access (see `src/bt_host.cpp`):
+
+1. **Register the BC250.** On the portal's *PlayStation controller wake* screen,
+   the ESP32 (when not spoofing) is discoverable as **"BC250 Power Setup"** with
+   a gamepad class of device. Use the on-screen *Turn BC250 on* control if the
+   board is off, then on the BC250 open **Steam → Settings → Bluetooth** and
+   select *BC250 Power Setup*. The BC250's connection attempt reveals its
+   address; the connection is rejected (Steam reporting a failure is expected)
+   and the address is shown to be saved. "BC250 Power Setup" is only
+   discoverable while that screen is open and polling.
+2. **Register controllers.** Shut the BC250 down from Steam, then choose
+   *Continue to controller step*. The ESP32 reboots into a one-shot spoofed
+   session (the `psLearn` flag) with the BC250 off and jumps to the controller
+   picker. Press **PS only** on each controller; its page is captured and listed
+   as *PlayStation (PS button)*. Select it and save. Up to four addresses are
+   supported, alongside Xbox/BLE controllers.
+
+Never pair a PlayStation controller to this board with **PS + Create** /
+**PS + SHARE**: that writes a new bond and breaks its pairing with the BC250.
+
+Page scan (connectability) is held off whenever the BC250 is not off: in
+`powerOn()` before the PSU is switched, and continuously whenever TPMS1 reports
+the board up. If the board is already up at boot the ESP32 does not spoof at all
+and keeps WiFi's factory MAC. When spoofing, the BT controller takes the BC250's
+address (base MAC − 2, since the controller uses base + 2) and the factory base
+MAC is restored right after the controller is enabled, so WiFi is unaffected.
+
+Xbox and other BLE controllers still wake via advertisement matching, exactly as
+before: a BLE advertisement matching a registered address triggers power-on
+without completing HID pairing. The boot log line `[BTHOST] addr=… spoofed=… reason=…`
+reports the chosen identity; `[BLE ] registered controller advertising` and the
+Classic wake path share the existing cooldown and silence-based re-arm.
 
 Upload both WROOM firmware and the filesystem image for this update.
 
@@ -303,5 +320,8 @@ responses do not prove impossibility; radio timing and controller state matter.
 After the test, upload normal `esp32-wroom32` firmware to restore operation.
 
 The reported DualSense PS-only trial returned `status=0x04` (Page Timeout),
-about 2.565 seconds per request, with no successful name responses. This remains
-a diagnostic experiment, not a validated DualSense wake method.
+about 2.565 seconds per request, with no successful name responses. This matches
+the expectation that a controller which is *paging* its host does not answer an
+outgoing name request (it is not page-scanning). The address-spoofing wake above
+supersedes this probe as the DualSense wake method; the probe remains only as a
+diagnostic.

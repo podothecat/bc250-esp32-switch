@@ -116,7 +116,59 @@
       <div class="msg" id="mqtt-msg"></div>
     </div>
 
-    <!-- 4. Controller -->
+    <!-- 4. PlayStation wake -->
+    <div class="card hidden" id="screen-ps">
+      <div class="steps" id="steps-ps"></div>
+      <div class="title">Controller wake</div>
+      <div class="sub" style="margin:6px 0 0">
+        Register the BC250 and your controllers so they can wake it. A PlayStation
+        controller then wakes it with the PS button alone; an Xbox or other BLE
+        controller wakes it when turned on. Registration never pairs a controller
+        to this device, so it keeps its pairing with the BC250.
+      </div>
+      <div class="hint" style="color:var(--err); margin-top:10px">
+        Do not pair a PlayStation controller to this device with Create + PS (PS5)
+        or SHARE + PS (PS4): that replaces its pairing with the BC250. Use only the
+        steps below.
+      </div>
+
+      <div style="margin-top:18px">
+        <div class="title" style="font-size:14px">1. Register the BC250</div>
+        <div class="scanning" id="ps-host-state">Checking…</div>
+        <button class="secondary" id="ps-power-btn">Turn BC250 on</button>
+        <div class="hint">
+          On the BC250, open Steam → Settings → Bluetooth and select
+          <b>BC250 Power Setup</b>. Steam will report that it could not connect —
+          that is expected, and the address is captured anyway.
+        </div>
+        <div class="hidden" id="ps-found">
+          <label for="ps-found-addr">BC250 address seen</label>
+          <input id="ps-found-addr" readonly />
+          <button id="ps-save-host">Save this BC250</button>
+        </div>
+        <div class="summary" id="ps-host-saved"></div>
+      </div>
+
+      <div style="margin-top:20px">
+        <div class="title" style="font-size:14px">2. Register controllers</div>
+        <div class="hint">
+          Shut the BC250 down from Steam first, then continue. On the next screen,
+          turn on each controller one at a time — a PlayStation controller with its
+          PS button, an Xbox controller with its small pairing button (top edge,
+          next to the USB port) until it flashes quickly.
+        </div>
+        <button id="ps-controller-step" disabled>Continue to controller step</button>
+        <button class="secondary hidden" id="ps-force-off">Force power off</button>
+      </div>
+
+      <div class="row">
+        <button class="secondary" data-back>Back</button>
+        <button class="secondary" data-skip>Skip</button>
+      </div>
+      <div class="msg" id="ps-msg"></div>
+    </div>
+
+    <!-- 5. Controller -->
     <div class="card hidden" id="screen-dev">
       <div class="steps" id="steps-dev"></div>
       <div class="title">Select up to 4 controllers</div>
@@ -153,7 +205,7 @@
   </div>
 
   <script>
-    const SCREENS = ["pass", "wifi", "mqtt", "dev", "done"];
+    const SCREENS = ["pass", "wifi", "mqtt", "ps", "dev", "done"];
     let current = "pass";
     let token = null;
     let selected = [];       // up to four controller MACs
@@ -161,6 +213,9 @@
     let devPollBusy = false;
     let devPollGeneration = 0;
     let settings = {};
+    let psSession = false;   // this boot is a spoofed controller-learning session
+    let hostTimer = null;
+    let hostPsuOn = false;
 
     const $ = (id) => document.getElementById(id);
 
@@ -190,6 +245,7 @@
       const back = $("screen-" + name).querySelector("[data-back]");
       if (back) back.classList.toggle("hidden", i <= 1);
       if (name === "dev") startDevPoll(); else stopDevPoll();
+      if (name === "ps") startHostPoll(); else stopHostPoll();
       if (name === "done") renderSummary();
       window.scrollTo(0, 0);
     }
@@ -256,7 +312,9 @@
         const data = await api(path, "POST", { password: pw });
         token = data.token;
         await loadSettings();
-        goNext();
+        // A spoofed controller-learning session goes straight to the picker: the
+        // user only needs to press PS buttons and save.
+        if (psSession) show("dev"); else goNext();
       } catch (e) {
         msg.className = "msg err"; msg.textContent = e.message;
       } finally {
@@ -434,9 +492,11 @@
         if (generation !== devPollGeneration || current !== "dev") return;
         const list = (data.devices || []).sort((a, b) => b.rssi - a.rssi);
         $("scan-state").textContent = scanStatus(data, list.length);
-        $("classic-hint").textContent = data.classicSupported
-          ? "Pair with this board first: PS + Create on PS5; PS + SHARE on PS4. Select the connected gamepad and save. Later, PS-button reconnect can wake the PC."
-          : "This board supports BLE only; PlayStation Classic controllers cannot be discovered.";
+        $("classic-hint").textContent = !data.classicSupported
+          ? "This board supports BLE only; PlayStation Classic controllers cannot be discovered."
+          : data.psSession
+          ? "Press the PS button on each PlayStation controller (listed as “PlayStation (PS button)”). Turn on Xbox/BLE controllers too — they appear by address; turn them on one at a time to tell them apart. Select each and save."
+          : "Xbox controllers appear here when turned on. For PlayStation controllers, use the PlayStation wake step instead of pairing here.";
         const box = $("dev-list");
         box.textContent = "";
         for (const d of list) {
@@ -510,7 +570,86 @@
       }
     };
 
-    // --- 5. Done ---
+    // --- PlayStation wake (host identity) ---
+    function startHostPoll() {
+      if (hostTimer) return;
+      pollHost();
+      hostTimer = setInterval(pollHost, 2000);
+    }
+    function stopHostPoll() {
+      if (hostTimer) { clearInterval(hostTimer); hostTimer = null; }
+    }
+
+    async function pollHost() {
+      try {
+        // learn=1 keeps "BC250 Power Setup" discoverable while this screen is open.
+        const d = await api("/api/host?learn=1");
+        if (current !== "ps") return;
+        hostPsuOn = !!d.psuOn;
+        $("ps-power-btn").textContent = d.psuOn ? "Turn BC250 off" : "Turn BC250 on";
+        $("ps-force-off").classList.toggle("hidden", !d.psuOn);
+        const parts = [d.boardUp ? "BC250 is ON" : "BC250 is off"];
+        parts.push(d.learning ? "discoverable as “BC250 Power Setup”" : "not discoverable");
+        $("ps-host-state").textContent = parts.join(" · ");
+
+        // A freshly captured address (not yet the saved one) is offered to save.
+        const found = d.learned && d.learned !== d.hostAddr;
+        $("ps-found").classList.toggle("hidden", !found);
+        if (found) $("ps-found-addr").value = d.learned;
+
+        $("ps-host-saved").textContent = d.hostAddr
+          ? "Saved BC250: " + d.hostAddr
+          : "No BC250 saved yet.";
+        // The controller step reboots into a spoofed session; it needs a saved
+        // BC250 and the board powered down.
+        $("ps-controller-step").disabled = !d.hostAddr || d.boardUp;
+      } catch (e) {
+        if (current === "ps") $("ps-host-state").textContent = "Error: " + e.message;
+      }
+    }
+
+    $("ps-power-btn").onclick = () => setHostPower(!hostPsuOn);
+    $("ps-force-off").onclick = () => setHostPower(false);
+    async function setHostPower(on) {
+      const msg = $("ps-msg");
+      msg.className = "msg";
+      try {
+        await api("/api/host/power", "POST", { on });
+        hostPsuOn = on;
+        await pollHost();
+      } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+    }
+
+    $("ps-save-host").onclick = async () => {
+      const msg = $("ps-msg");
+      msg.className = "msg";
+      try {
+        const addr = $("ps-found-addr").value.trim();
+        await api("/api/host/select", "POST", { addr });
+        settings.btHost = addr;
+        msg.className = "msg ok";
+        msg.textContent = "Saved. Now shut the BC250 down and continue to step 2.";
+        await pollHost();
+      } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+    };
+
+    $("ps-controller-step").onclick = async () => {
+      const msg = $("ps-msg");
+      msg.className = "msg";
+      try {
+        $("ps-controller-step").disabled = true;
+        await api("/api/host/controller-step", "POST", {});
+        stopHostPoll();
+        msg.className = "msg ok";
+        msg.textContent = "Rebooting… reconnect to this AP, log in, then press each "
+          + "controller's PS button when the controller list appears.";
+      } catch (e) {
+        msg.className = "msg err"; msg.textContent = e.message;
+        $("ps-controller-step").disabled = false;
+      }
+    };
+
+    // --- 6. Done ---
     function renderSummary() {
       const box = $("summary");
       box.textContent = "";
@@ -522,6 +661,7 @@
           ? settings.mqttHost + ":" + (settings.mqttPort || 1883)
           : "disabled"],
         ["Controllers", (settings.wakeAddrs || []).join(", ") || settings.wakeAddr || "none"],
+        ["BC250 Bluetooth", settings.btHost || "not registered"],
       ];
       for (const [k, v] of rows) {
         const line = document.createElement("div");
@@ -559,8 +699,29 @@
     (async () => {
       try {
         const st = await api("/api/status");
+        psSession = !!st.psSession;
+        // PS-button wake needs Bluetooth Classic; drop the screen on BLE-only boards.
+        if (st.classicSupported === false) {
+          const i = SCREENS.indexOf("ps");
+          if (i >= 0) SCREENS.splice(i, 1);
+          const card = $("screen-ps");
+          if (card) card.remove();
+        }
+        // On a Classic board the ordinary picker pairs (bonds) each BLE controller
+        // to this device, which would steal an Xbox controller away from the
+        // BC250. Register controllers through the spoofed controller step instead
+        // (reached from the controller-wake screen). The spoofed session reuses
+        // this same "dev" picker, but lists controllers by address without
+        // bonding, so keep it in the flow for that session only.
+        if (st.classicSupported && !psSession) {
+          const i = SCREENS.indexOf("dev");
+          if (i >= 0) SCREENS.splice(i, 1);
+        }
         const bound = st.wakeAddrs || (st.wakeAddr ? [st.wakeAddr] : []);
-        if (bound.length) $("subtitle").textContent = "Currently bound: " + bound.join(", ");
+        if (psSession)
+          $("subtitle").textContent = "Controller learning session — press each PS button";
+        else if (bound.length)
+          $("subtitle").textContent = "Currently bound: " + bound.join(", ");
         initPassScreen(st.passwordSet);
       } catch (e) {
         $("subtitle").textContent = "Cannot reach device: " + e.message;

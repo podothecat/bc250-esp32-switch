@@ -30,6 +30,83 @@ struct Stats {
 };
 static Stats stats;
 
+// BLE controllers such as the Xbox Wireless Controller advertise their name in a
+// scan response and their gamepad appearance / HID service UUID in the primary
+// advertisement, arriving as two separate reports. A spoofed learning session
+// cannot bond to read the model name, so merge both halves here, keyed by
+// address, and remember whether a device ever looked like a controller. Only the
+// Bluetooth task touches this table.
+struct AdvCache {
+  bd_addr_t addr{};
+  char name[33] = {};
+  bool gamepad = false;
+  bool used = false;
+  uint32_t lastSeen = 0;
+};
+static AdvCache advCache[24];
+
+// Bounded TLV parse of advertising / scan-response data for a Complete (0x09) or
+// Shortened (0x08) Local Name, a controller hint from the Appearance (0x19) or a
+// 16-bit HID service UUID (0x1812) in a service-UUID list (0x02/0x03), and the
+// Manufacturer Specific (0xFF) company id so a nameless controller can still be
+// labeled by its maker.
+static void parseAdvData(const uint8_t *data, uint8_t len, char *name,
+                         size_t capacity, bool *gamepad, uint16_t *company) {
+  for (uint8_t i = 0; i + 1 < len;) {
+    uint8_t fieldLen = data[i];
+    if (!fieldLen || uint16_t(i) + 1 + fieldLen > len) break;
+    uint8_t adType = data[i + 1];
+    const uint8_t *val = data + i + 2;
+    uint8_t vlen = fieldLen - 1;
+    if (adType == 0x09 || (adType == 0x08 && !name[0])) {
+      uint8_t n = vlen < capacity - 1 ? vlen : uint8_t(capacity - 1);
+      memcpy(name, val, n);
+      name[n] = 0;
+    } else if (adType == 0x19 && vlen >= 2) {
+      uint16_t appearance = uint16_t(val[0]) | uint16_t(val[1]) << 8;
+      if (appearance == 0x03C4 || appearance == 0x03C3) *gamepad = true;
+    } else if ((adType == 0x02 || adType == 0x03) && vlen >= 2) {
+      for (uint8_t j = 0; j + 1 < vlen; j += 2) {
+        uint16_t uuid = uint16_t(val[j]) | uint16_t(val[j + 1]) << 8;
+        if (uuid == 0x1812) *gamepad = true;
+      }
+    } else if (adType == 0xFF && vlen >= 2 && !*company) {
+      *company = uint16_t(val[0]) | uint16_t(val[1]) << 8;
+    }
+    i += fieldLen + 1;
+  }
+}
+
+// Bluetooth SIG company identifiers for controller makers whose BLE pads do not
+// put a name in the advertisement (the name is in a scan response we cannot read
+// in a spoofed, no-bond session). Used only to label an otherwise-nameless pad.
+static const char *gamepadLabelForCompany(uint16_t company) {
+  switch (company) {
+    case 0x0006: return "Xbox controller";       // Microsoft
+    case 0x054C: return "PlayStation controller"; // Sony
+    case 0x057E: return "Nintendo controller";    // Nintendo
+    default: return "Gamepad";
+  }
+}
+
+static AdvCache *advCacheFor(const bd_addr_t address, uint32_t now) {
+  int free = -1, oldest = 0;
+  for (int i = 0; i < 24; ++i) {
+    if (advCache[i].used) {
+      if (memcmp(advCache[i].addr, address, 6) == 0) return &advCache[i];
+      if (uint32_t(now - advCache[i].lastSeen) >
+          uint32_t(now - advCache[oldest].lastSeen)) oldest = i;
+    } else if (free < 0) {
+      free = i;
+    }
+  }
+  int idx = free >= 0 ? free : oldest;
+  advCache[idx] = AdvCache{};
+  memcpy(advCache[idx].addr, address, 6);
+  advCache[idx].used = true;
+  return &advCache[idx];
+}
+
 static void observe(uint8_t type, uint16_t, uint8_t *packet, uint16_t size) {
   if (type != HCI_EVENT_PACKET || size < 2) return;
   portENTER_CRITICAL(&statsMux);
@@ -90,10 +167,32 @@ static void observe(uint8_t type, uint16_t, uint8_t *packet, uint16_t size) {
       size >= 12 && advertisementFound) {
     bd_addr_t address;
     gap_event_advertising_report_get_address(packet, address);
+    const uint8_t *advData = gap_event_advertising_report_get_data(packet);
+    uint8_t advLen = gap_event_advertising_report_get_data_length(packet);
+    char name[33] = {};
+    bool gamepad = false;
+    uint16_t company = 0;
+    parseAdvData(advData, advLen, name, sizeof(name), &gamepad, &company);
+    uint32_t now = millis();
+    AdvCache *entry = advCacheFor(address, now);
+    if (gamepad) entry->gamepad = true;
+    // A real advertised name always wins. Otherwise, the first time a device looks
+    // like a controller, synthesize a label from its maker so it is not listed as
+    // "unknown"; a real name arriving later (e.g. in a scan response) replaces it.
+    if (name[0]) {
+      strncpy(entry->name, name, sizeof(entry->name) - 1);
+      entry->name[sizeof(entry->name) - 1] = 0;
+    } else if (entry->gamepad && !entry->name[0]) {
+      strncpy(entry->name, gamepadLabelForCompany(company), sizeof(entry->name) - 1);
+      entry->name[sizeof(entry->name) - 1] = 0;
+    }
+    entry->lastSeen = now;
     char addr[18];
     snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
              address[0], address[1], address[2], address[3], address[4], address[5]);
-    advertisementFound(addr, static_cast<int8_t>(gap_event_advertising_report_get_rssi(packet)));
+    advertisementFound(addr, entry->name,
+                       static_cast<int8_t>(gap_event_advertising_report_get_rssi(packet)),
+                       entry->gamepad);
   }
 }
 

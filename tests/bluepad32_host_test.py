@@ -38,7 +38,7 @@ void hciComplete(int i){assert(devices[i].conn.handle==i);devices[i].conn.connec
 struct Properties {uint8_t btaddr[6]={1,2,3,4,5,6};};
 struct Controller {bool gamepad=true,data=true;int idx=0;int index(){return idx;}bool isGamepad(){return gamepad;}bool hasData(){return data;}Properties getProperties(){return {};}std::string getModelName(){return "DualSense";}};
 using ControllerPtr=Controller*;
-using ControllerAdvertisement=void(*)(const char*,int);
+using ControllerAdvertisement=void(*)(const char*,const char*,int,bool);
 ControllerAdvertisement advertisementCallback=nullptr;
 void controllerDiagBegin(ControllerAdvertisement callback){advertisementCallback=callback;}void controllerDiagPoll(bool){}
 struct SerialFake {template<class... T>void printf(const char*,T...){}void println(const char*){}}Serial;
@@ -46,6 +46,11 @@ struct BP {std::function<void(ControllerPtr)> connected,disconnected;bool enable
 bool uni_bt_enable_new_connections_is_enabled(){return BP32.enabled;}
 void uni_bt_enable_new_connections_unsafe(bool v){BP32.enabled=v;}
 int events=0;std::string address;void capture(const char*a,const char*,int,bool){++events;address=a;}
+using BtHostIncoming=void(*)(const char*);
+BtHostIncoming hostIncoming=nullptr;
+void btHostSetIncoming(BtHostIncoming cb){hostIncoming=cb;}
+bool spoofedStub=false;
+bool btHostSpoofed(){return spoofedStub;}
 '''
 checks=r'''
 int main(){
@@ -101,18 +106,34 @@ int main(){
  clockMs+=500;controllerScanLoop();pump();assert(controllerScanRunning());
  __wrap_uni_bt_le_on_gap_event_advertising_report(advertisement,sizeof(advertisement));
  assert(bleConnectionHandlers==1); // normal scan never starts BLE HID
- advertisementCallback("0c:35:26:59:9a:6c",-60);
- assert(events==sightings+1&&address=="0c:35:26:59:9a:6c");
- controllerScanStop();advertisementCallback("0c:35:26:59:9a:6c",-60);
+ advertisementCallback("0c:35:26:59:9a:6c","",-60,false);
+ assert(events==sightings+1&&address=="0c:35:26:59:9a:6c"); // normal: gamepad flag ignored
+ controllerScanStop();advertisementCallback("0c:35:26:59:9a:6c","",-60,false);
  assert(events==sightings+1);
  controllerScanBegin(capture,true,true);
- advertisementCallback("0c:35:26:59:9a:6c",-60);
- assert(events==sightings+1); // picker requires a verified gamepad
+ advertisementCallback("0c:35:26:59:9a:6c","",-60,true);
+ assert(events==sightings+1); // non-spoofed picker lists HID-verified pads only
+ spoofedStub=true;
+ advertisementCallback("aa:bb:cc:dd:ee:ff","",-60,false);
+ assert(events==sightings+1); // spoofed picker ignores non-gamepad advertisers
+ advertisementCallback("aa:bb:cc:dd:ee:ff","Xbox Wireless Controller",-60,true);
+ assert(events==sightings+2&&address=="aa:bb:cc:dd:ee:ff"); // spoofed picker lists gamepads by address
+ spoofedStub=false;
  __wrap_uni_bt_le_on_gap_event_advertising_report(advertisement,sizeof(advertisement));
  assert(bleConnectionHandlers==2); // setup can pair again
  controllerScanStop();
  __wrap_uni_bt_le_on_gap_event_advertising_report(advertisement,sizeof(advertisement));
  assert(bleConnectionHandlers==2); // no late pairing while paused
+ // A Classic page captured by the host-identity filter is reported as a Classic
+ // sighting while scanning, and ignored once stopped.
+ assert(hostIncoming);
+ controllerScanBegin(capture,false,true);
+ int base=events;
+ hostIncoming("0a:1b:2c:3d:4e:5f");
+ assert(events==base+1&&address=="0a:1b:2c:3d:4e:5f");
+ controllerScanStop();
+ hostIncoming("0a:1b:2c:3d:4e:5f");
+ assert(events==base+1);
 }
 '''
 with tempfile.TemporaryDirectory() as d:

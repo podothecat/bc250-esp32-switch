@@ -14,6 +14,7 @@
 
 #include "board.h"
 #include "config.h"
+#include "bt_host.h"
 
 static const size_t MIN_PASSWORD_LEN = 6;
 
@@ -188,6 +189,33 @@ static void scanWifiNetworks() {
   Serial.printf("[PORTAL] wifi scan: %d found, %d cached\n", n, netCount);
 }
 
+// --- PlayStation host (BC250 Bluetooth identity) setup ---
+//
+// Two jobs, both console-free:
+//   1. Learn the BC250's Bluetooth address. In a normal (non-spoofed) session
+//      the device advertises as "BC250 Power Setup"; selecting it in Steam's
+//      Bluetooth menu makes the BC250 page us, and its address is captured from
+//      the (rejected) connection request. The learning window is only open while
+//      the host screen is polling, like the controller picker.
+//   2. Register the PlayStation controllers. "Continue to controller step"
+//      reboots into a spoofed session (psLearn) with the BC250 off; pressing a
+//      controller's PS button then pages our spoofed address and the controller
+//      is listed in the normal picker.
+static bool        g_psSession = false;     // this boot spoofs the BC250
+static volatile bool g_boardUp  = false;    // debounced-free TPMS1 snapshot
+static volatile bool g_psuOn    = false;    // PS_ON# asserted via the portal
+static portMUX_TYPE  hostMux    = portMUX_INITIALIZER_UNLOCKED;
+static bool        g_hostLearnRequested  = false;   // guarded by hostMux
+static uint32_t    g_hostLearnLastRequest = 0;      // guarded by hostMux
+static bool        g_hostLearning = false;          // last applied, loop only
+static const uint32_t HOST_LEARN_IDLE_MS = 12000;
+
+static bool readPortalBoardSense() {
+  uint32_t acc = 0;
+  for (int i = 0; i < SENSE_OVERSAMPLE; ++i) acc += analogReadMilliVolts(BOARD_SENSE);
+  return acc / SENSE_OVERSAMPLE > (uint32_t)SENSE_HIGH_MV;
+}
+
 // --- Endpoint handlers ---
 
 static void handleStatus(AsyncWebServerRequest *req) {
@@ -197,6 +225,8 @@ static void handleStatus(AsyncWebServerRequest *req) {
   JsonArray addrs = doc["wakeAddrs"].to<JsonArray>();
   for (uint8_t i = 0; i < config.wakeAddrCount; ++i) addrs.add(config.wakeAddrs[i]);
   doc["configured"]  = isConfigured();
+  doc["psSession"]   = g_psSession;
+  doc["classicSupported"] = controllerScanStatus().classicSupported;
   String out;
   serializeJson(doc, out);
   req->send(200, "application/json", out);
@@ -228,6 +258,7 @@ static void handleGetSettings(AsyncWebServerRequest *req) {
   doc["mqttPassSet"] = config.mqttPass.length() > 0;
   doc["deviceName"]  = config.deviceName;
   doc["wakeAddr"]    = config.wakeAddr;
+  doc["btHost"]      = config.btHost;
   JsonArray addrs = doc["wakeAddrs"].to<JsonArray>();
   for (uint8_t i = 0; i < config.wakeAddrCount; ++i) addrs.add(config.wakeAddrs[i]);
   String out;
@@ -396,6 +427,7 @@ static void handleBleDevices(AsyncWebServerRequest *req) {
 
   ControllerScanStatus bt = controllerScanStatus();
   doc["classicSupported"] = bt.classicSupported;
+  doc["psSession"] = g_psSession;
   doc["bleScanning"] = bt.bleRunning;
   doc["classicScanning"] = bt.classicRunning;
   doc["bleError"] = bt.bleError;
@@ -536,6 +568,73 @@ static void handleBleSelect(AsyncWebServerRequest *req, JsonVariant &json) {
   req->send(200, "application/json", "{\"ok\":true}");
 }
 
+// GET /api/host[?learn=1] — host-identity status. learn=1 opens (and keeps
+// alive) the BC250 discovery window, so "BC250 Power Setup" only shows in Steam
+// while this screen is polling.
+static void handleHost(AsyncWebServerRequest *req) {
+  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
+  if (req->hasParam("learn") && req->getParam("learn")->value() == "1") {
+    portENTER_CRITICAL(&hostMux);
+    g_hostLearnRequested = true;
+    g_hostLearnLastRequest = millis();
+    portEXIT_CRITICAL(&hostMux);
+  }
+  JsonDocument doc;
+  doc["spoofed"]   = btHostSpoofed();
+  doc["psSession"] = g_psSession;
+  doc["reason"]    = btHostIdentityReason();
+  doc["hostAddr"]  = config.btHost;
+  doc["boardUp"]   = g_boardUp;
+  doc["psuOn"]     = g_psuOn;
+  doc["learning"]  = g_hostLearning;
+  char learned[18];
+  if (btHostLearnedAddr(learned)) doc["learned"] = learned;
+  else doc["learned"] = nullptr;
+  String out;
+  serializeJson(doc, out);
+  req->send(200, "application/json", out);
+}
+
+// POST /api/host/power {on} — assert or release PS_ON# so the BC250 can be
+// powered on from the setup screen (setup mode keeps it released otherwise).
+static void handleHostPower(AsyncWebServerRequest *req, JsonVariant &json) {
+  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
+  JsonObject o = json.as<JsonObject>();
+  bool on = o["on"] | false;
+  digitalWrite(PS_ON_PIN, on ? PS_ON_ASSERT : PS_ON_RELEASE);
+  g_psuOn = on;
+  Serial.printf("[PORTAL] host power %s\n", on ? "ON" : "OFF");
+  req->send(200, "application/json", "{\"ok\":true}");
+}
+
+// POST /api/host/select {addr} — save the learned BC250 address (""" clears).
+static void handleHostSelect(AsyncWebServerRequest *req, JsonVariant &json) {
+  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
+  JsonObject o = json.as<JsonObject>();
+  String addr = o["addr"] | "";
+  addr.trim();
+  addr.toLowerCase();
+  if (!setBtHost(addr)) { sendJsonError(req, 400, "invalid address"); return; }
+  btHostClearLearned();
+  Serial.printf("[PORTAL] BC250 host %s\n",
+                addr.isEmpty() ? "cleared" : addr.c_str());
+  req->send(200, "application/json", "{\"ok\":true}");
+}
+
+// POST /api/host/controller-step — reboot into a spoofed session so PS-button
+// pages can be registered. Requires a saved BC250 and the board powered down.
+static void handleHostControllerStep(AsyncWebServerRequest *req) {
+  if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
+  if (config.btHost.isEmpty()) { sendJsonError(req, 409, "save the BC250 first"); return; }
+  if (g_boardUp) { sendJsonError(req, 409, "turn the BC250 off first"); return; }
+  setPsLearn(true);
+  digitalWrite(PS_ON_PIN, PS_ON_RELEASE);
+  g_psuOn = false;
+  req->send(200, "application/json", "{\"ok\":true}");
+  Serial.println("[PORTAL] controller step requested; rebooting into spoofed session");
+  g_restartAt = millis() + 800;
+}
+
 static void handleFinish(AsyncWebServerRequest *req) {
   if (!authed(req)) { sendJsonError(req, 401, "unauthorized"); return; }
   if (!isConfigured()) { sendJsonError(req, 400, "not fully configured"); return; }
@@ -556,6 +655,17 @@ void portalBegin() {
   pinMode(BUTTON_GND, OUTPUT);
   digitalWrite(BUTTON_GND, LOW);
   pinMode(BUTTON_SENSE, INPUT_PULLUP);
+  analogSetPinAttenuation(BOARD_SENSE, ADC_11db);
+
+  // A spoofed boot (chosen in bt_host.cpp from the psLearn flag) is a one-shot
+  // controller-registration session. Clear the flag now so a later ordinary
+  // reboot returns to the "BC250 Power Setup" identity.
+  g_psSession = btHostSpoofed();
+  if (config.psLearn) setPsLearn(false);
+  g_boardUp = readPortalBoardSense();
+  Serial.printf("[PORTAL] host identity: %s (%s), board %s\n",
+                g_psSession ? "spoofing BC250" : "BC250 Power Setup",
+                btHostIdentityReason(), g_boardUp ? "UP" : "down");
 
   if (!SPIFFS.begin(true)) {
     Serial.println("[PORTAL] WARNING: SPIFFS mount failed");
@@ -597,6 +707,8 @@ void portalBegin() {
   server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/api/ble/devices", HTTP_GET, handleBleDevices);
   server.on("/api/ble/rescan", HTTP_POST, handleBleRescan);
+  server.on("/api/host", HTTP_GET, handleHost);
+  server.on("/api/host/controller-step", HTTP_POST, handleHostControllerStep);
   server.on("/api/finish", HTTP_POST, handleFinish);
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/password", handlePassword));
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/login", handleLogin));
@@ -604,6 +716,8 @@ void portalBegin() {
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/mqtt", handleMqtt));
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/device", handleDevice));
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/ble/select", handleBleSelect));
+  server.addHandler(new AsyncCallbackJsonWebHandler("/api/host/power", handleHostPower));
+  server.addHandler(new AsyncCallbackJsonWebHandler("/api/host/select", handleHostSelect));
 
   server.on("/", HTTP_GET, serveIndex);
   server.onNotFound([](AsyncWebServerRequest *req) {
@@ -618,8 +732,31 @@ void portalBegin() {
   Serial.println("[PORTAL] web server up. Connect to the AP and open http://192.168.4.1");
 }
 
+// Host-identity page-scan control, run on the Arduino task. Mirrors the picker's
+// idle window: the BC250 discovery identity ("BC250 Power Setup") is only
+// connectable while the host screen is actively polling with learn=1.
+static void servicePortalHost() {
+  uint32_t now = millis();
+  g_boardUp = readPortalBoardSense();
+  portENTER_CRITICAL(&hostMux);
+  bool learnActive = g_hostLearnRequested &&
+      uint32_t(now - g_hostLearnLastRequest) < HOST_LEARN_IDLE_MS;
+  portEXIT_CRITICAL(&hostMux);
+  learnActive = learnActive && WiFi.softAPgetStationNum() > 0;
+  if (g_psSession) {
+    // Spoofed session: answer PS-button pages only while the BC250 is down.
+    btHostSetLearning(false);
+    btHostAllowIncoming(!g_boardUp);
+    g_hostLearning = false;
+  } else {
+    btHostSetLearning(learnActive);
+    g_hostLearning = learnActive;
+  }
+}
+
 void portalLoop() {
   dnsServer.processNextRequest();
+  servicePortalHost();
 #if defined(BC250_BLUEPAD32)
   // Paired devices can still reconnect after discovery stops. Drain callbacks
   // so they are released even when no Wi-Fi client or picker is active.

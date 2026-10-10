@@ -1,5 +1,6 @@
 #include "controller_scan.h"
 #include "board.h"
+#include "bt_host.h"
 
 static ControllerFound found;
 static bool setupScan;
@@ -40,10 +41,31 @@ static ControllerPtr pendingControllers[BP32_MAX_CONTROLLERS]{};
 static uint32_t pendingSince[BP32_MAX_CONTROLLERS]{};
 static constexpr uint32_t FIRST_REPORT_TIMEOUT_MS = 10000;
 static portMUX_TYPE commandMux = portMUX_INITIALIZER_UNLOCKED;
-static void advertisementSeen(const char *addr, int rssi) {
-  // Setup still lists verified gamepads. Normal wake matches the saved address
-  // in main.cpp and must not depend on a successful HID bond with this host.
-  if (wanted && !setupScan && found) found(addr, "", rssi, false);
+static void advertisementSeen(const char *addr, const char *name, int rssi,
+                              bool gamepad) {
+  if (!wanted || !found) return;
+  // Normal wake matches the saved address in main.cpp and must not depend on a
+  // successful HID bond with this host, nor on the pad advertising a recognizable
+  // appearance, so report every sighting on that path.
+  if (!setupScan) { found(addr, name, rssi, false); return; }
+  // A spoofed controller-learning session disables BLE HID pairing (a new bond
+  // would re-pair the pad against the BC250 address), so BLE pads such as Xbox
+  // can only be registered by their advertised address. Filter to likely game
+  // controllers (gamepad appearance or HID service) so the picker is not buried
+  // under every unrelated BLE advertiser; the diag layer gives each one a name or
+  // a maker label. A pad that advertises neither marker can still be added with
+  // the manual MAC field. An ordinary (non-spoofed) picker lists HID-verified
+  // pads only, handled by the connect path.
+  if (btHostSpoofed() && gamepad) found(addr, name, rssi, false);
+}
+// A Classic page captured by the host-identity filter (bt_host.cpp): a
+// controller paging the BC250's address while we spoof it, or, in the picker,
+// a PlayStation controller offering itself for registration. Reported as a
+// Classic sighting; main.cpp matches it against the saved addresses to wake,
+// and the picker lists it under a friendly label.
+static void incomingSeen(const char *addr) {
+  if (wanted && found)
+    found(addr, setupScan ? "PlayStation (PS button)" : "", -127, true);
 }
 static void runBtCommand(void *context) {
   auto *command = static_cast<BtCommand *>(context);
@@ -114,6 +136,7 @@ static void disconnected(ControllerPtr controller) {
 void controllerScanPrepare() {
   if (initialized) return;
   BP32.setup(connected, disconnected);
+  btHostSetIncoming(incomingSeen);
   // The package starts its first periodic inquiry before Arduino setup. Wait
   // for that command to leave BTstack's pending state before cancelling it.
   // Virtual devices are disabled by default; avoid another queued command here.
@@ -128,7 +151,11 @@ bool controllerScanBegin(ControllerFound callback, bool setup, bool coex) {
   return controllerScanStart();
 }
 bool controllerScanStart() {
-  bleHidAllowed.store(setupScan);
+  // Never start BLE HID pairing under a spoofed BC250 identity: a new bond would
+  // be written against the BC250's address and could overwrite a real console
+  // bond (e.g. an Xbox controller's). Spoofed sessions only capture Classic
+  // pages via the host-identity filter.
+  bleHidAllowed.store(setupScan && !btHostSpoofed());
   wanted = true;
   Serial.printf("[BT] BLE mode: %s\n", setupScan ? "HID setup" : "advertisements only (no BLE connections)");
   // Discovery commands execute asynchronously on the BT task. Allow an
