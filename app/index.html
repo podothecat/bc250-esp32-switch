@@ -51,6 +51,27 @@
     <h1>BC250 Switch</h1>
     <div class="sub" id="subtitle">Setup portal</div>
 
+    <!-- 0. Start (launcher, not part of the numbered flow) -->
+    <div class="card hidden" id="screen-start">
+      <div class="title">BC250 Switch setup</div>
+      <div class="sub" style="margin:6px 0 16px">
+        Configure WiFi, Home Assistant and the wake controller — or wipe the board
+        to hand it on.
+      </div>
+      <button id="start-btn">Start setup</button>
+      <div class="reset-zone" id="reset-zone">
+        <button class="secondary" id="reset-btn">Factory reset…</button>
+        <div class="hidden" id="reset-confirm">
+          <p class="hint">Erase every stored setting — WiFi, bound controllers
+          and the BC250 address — and reboot into a fresh setup. For handing the
+          board to someone else.</p>
+          <button id="reset-confirm-btn">Erase everything &amp; reboot</button>
+          <button class="secondary" id="reset-cancel-btn">Cancel</button>
+        </div>
+        <div class="msg" id="reset-msg"></div>
+      </div>
+    </div>
+
     <!-- 1. WiFi -->
     <div class="card hidden" id="screen-wifi">
       <div class="steps" id="steps-wifi"></div>
@@ -78,17 +99,6 @@
         <button class="secondary" data-skip>Skip</button>
       </div>
       <div class="msg" id="wifi-msg"></div>
-      <div class="reset-zone" id="reset-zone">
-        <button class="secondary" id="reset-btn">Factory reset…</button>
-        <div class="hidden" id="reset-confirm">
-          <p class="hint">Erase every stored setting — WiFi, bound controllers
-          and the BC250 address — and reboot into a fresh setup. For handing the
-          board to someone else.</p>
-          <button id="reset-confirm-btn">Erase everything &amp; reboot</button>
-          <button class="secondary" id="reset-cancel-btn">Cancel</button>
-        </div>
-        <div class="msg" id="reset-msg"></div>
-      </div>
     </div>
 
     <!-- 2. MQTT -->
@@ -232,24 +242,38 @@
     // --- Screen navigation ---
     function show(name) {
       current = name;
+      $("screen-start").classList.add("hidden");
       for (const s of SCREENS) {
         $("screen-" + s).classList.toggle("hidden", s !== name);
       }
       const i = SCREENS.indexOf(name);
       $("steps-" + name).textContent = "STEP " + (i + 1) + " OF " + SCREENS.length;
-      // Hide "Back" on the first screen — there is nothing before it.
+      // "Back" is always available now: from the first step it returns to the
+      // launcher screen (see goBack).
       const back = $("screen-" + name).querySelector("[data-back]");
-      if (back) back.classList.toggle("hidden", i <= 0);
+      if (back) back.classList.remove("hidden");
       if (name === "dev") startDevPoll(); else stopDevPoll();
       if (name === "ps") startHostPoll(); else stopHostPoll();
       if (name === "done") renderSummary();
       window.scrollTo(0, 0);
     }
     const goNext = () => show(SCREENS[SCREENS.indexOf(current) + 1]);
-    const goBack = () => show(SCREENS[SCREENS.indexOf(current) - 1]);
+    const goBack = () =>
+      SCREENS.indexOf(current) <= 0 ? showStart() : show(SCREENS[SCREENS.indexOf(current) - 1]);
+
+    // The launcher screen (not part of the numbered flow): Start setup or wipe.
+    function showStart() {
+      current = "start";
+      for (const s of SCREENS) $("screen-" + s).classList.add("hidden");
+      $("screen-start").classList.remove("hidden");
+      stopDevPoll();
+      stopHostPoll();
+      window.scrollTo(0, 0);
+    }
 
     document.querySelectorAll("[data-back]").forEach((b) => (b.onclick = goBack));
     document.querySelectorAll("[data-skip]").forEach((b) => (b.onclick = goNext));
+    $("start-btn").onclick = () => show("wifi");
 
     function rssiBars(r) {
       if (r >= -55) return "▂▄▆█";
@@ -708,8 +732,9 @@
         else if (bound.length)
           $("subtitle").textContent = "Currently bound: " + bound.join(", ");
         await loadSettings();
-        // A spoofed controller-learning session goes straight to the picker.
-        show(psSession ? "dev" : SCREENS[0]);
+        // A spoofed controller-learning session goes straight to the picker;
+        // otherwise land on the launcher (Start setup / Factory reset).
+        if (psSession) show("dev"); else showStart();
       } catch (e) {
         $("subtitle").textContent = "Cannot reach device: " + e.message;
       }
