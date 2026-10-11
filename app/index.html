@@ -44,29 +44,37 @@
     #reset-confirm-btn { background:var(--err); color:#fff; }
     .summary { font-size:13px; line-height:1.7; margin-top:10px; }
     .summary .k { color:var(--muted); }
+    .lang { display:flex; gap:6px; justify-content:flex-end; margin-bottom:4px; }
+    .lang button { width:auto; margin:0; padding:4px 10px; font-size:12px; font-weight:normal;
+                   background:transparent; color:var(--muted); border:1px solid #333; }
+    .lang button.on { color:var(--accent); border-color:var(--accent); }
   </style>
 </head>
 <body>
   <div class="wrap">
+    <div class="lang">
+      <button id="lang-en">EN</button>
+      <button id="lang-ko">한국어</button>
+    </div>
     <h1>BC250 Switch</h1>
-    <div class="sub" id="subtitle">Setup portal</div>
+    <div class="sub" id="subtitle" data-i18n="subtitle_default">Setup portal</div>
 
     <!-- 0. Start (launcher, not part of the numbered flow) -->
     <div class="card hidden" id="screen-start">
-      <div class="title">BC250 Switch setup</div>
-      <div class="sub" style="margin:6px 0 16px">
+      <div class="title" data-i18n="start_title">BC250 Switch setup</div>
+      <div class="sub" style="margin:6px 0 16px" data-i18n="start_sub">
         Configure WiFi, Home Assistant and the wake controller — or wipe the board
         to hand it on.
       </div>
-      <button id="start-btn">Start setup</button>
+      <button id="start-btn" data-i18n="start_btn">Start setup</button>
       <div class="reset-zone" id="reset-zone">
-        <button class="secondary" id="reset-btn">Factory reset…</button>
+        <button class="secondary" id="reset-btn" data-i18n="reset_btn">Factory reset…</button>
         <div class="hidden" id="reset-confirm">
-          <p class="hint">Erase every stored setting — WiFi, bound controllers
+          <p class="hint" data-i18n="reset_hint">Erase every stored setting — WiFi, bound controllers
           and the BC250 address — and reboot into a fresh setup. For handing the
           board to someone else.</p>
-          <button id="reset-confirm-btn">Erase everything &amp; reboot</button>
-          <button class="secondary" id="reset-cancel-btn">Cancel</button>
+          <button id="reset-confirm-btn" data-i18n="reset_confirm_btn">Erase everything &amp; reboot</button>
+          <button class="secondary" id="reset-cancel-btn" data-i18n="cancel">Cancel</button>
         </div>
         <div class="msg" id="reset-msg"></div>
       </div>
@@ -75,28 +83,28 @@
     <!-- 1. WiFi -->
     <div class="card hidden" id="screen-wifi">
       <div class="steps" id="steps-wifi"></div>
-      <div class="title">Join a WiFi network</div>
-      <div class="sub" style="margin:6px 0 0">
+      <div class="title" data-i18n="wifi_title">Join a WiFi network</div>
+      <div class="sub" style="margin:6px 0 0" data-i18n="wifi_sub">
         Optional. Needed for Home Assistant; the button works without it.
       </div>
-      <div class="scanning" id="wifi-state">Loading…</div>
+      <div class="scanning" id="wifi-state" data-i18n="wifi_state_loading">Loading…</div>
       <div id="wifi-list"></div>
-      <label for="wifi-ssid">Network name</label>
-      <input id="wifi-ssid" placeholder="SSID (or pick one above)" autocomplete="off" />
-      <label for="wifi-pw">WiFi password</label>
+      <label for="wifi-ssid" data-i18n="lbl_ssid">Network name</label>
+      <input id="wifi-ssid" data-i18n-ph="ph_ssid" placeholder="SSID (or pick one above)" autocomplete="off" />
+      <label for="wifi-pw" data-i18n="lbl_wifi_pw">WiFi password</label>
       <input id="wifi-pw" type="password" autocomplete="off" />
       <div class="hint" id="wifi-pw-hint"></div>
-      <label class="check"><input id="wifi-wol" type="checkbox" /> Wake the machine on LAN magic packets</label>
-      <div class="hint">Requires this device to be connected to the same network that receives the WoL broadcast.</div>
+      <label class="check"><input id="wifi-wol" type="checkbox" /> <span data-i18n="wol_check">Wake the machine on LAN magic packets</span></label>
+      <div class="hint" data-i18n="wol_hint">Requires this device to be connected to the same network that receives the WoL broadcast.</div>
       <div class="hidden" id="wol-mac-wrap">
-        <label for="wol-mac">MAC address to enter in your WoL app</label>
+        <label for="wol-mac" data-i18n="lbl_wol_mac">MAC address to enter in your WoL app</label>
         <input id="wol-mac" readonly />
-        <div class="hint">Send the WoL magic packet to this MAC. The ESP32 will turn on the machine when it receives it.</div>
+        <div class="hint" data-i18n="wol_mac_hint">Send the WoL magic packet to this MAC. The ESP32 will turn on the machine when it receives it.</div>
       </div>
-      <button id="wifi-btn">Save &amp; continue</button>
+      <button id="wifi-btn" data-i18n="save_continue">Save &amp; continue</button>
       <div class="row">
-        <button class="secondary" data-back>Back</button>
-        <button class="secondary" data-skip>Skip</button>
+        <button class="secondary" data-back data-i18n="back">Back</button>
+        <button class="secondary" data-skip data-i18n="skip">Skip</button>
       </div>
       <div class="msg" id="wifi-msg"></div>
     </div>
@@ -104,23 +112,23 @@
     <!-- 2. MQTT -->
     <div class="card hidden" id="screen-mqtt">
       <div class="steps" id="steps-mqtt"></div>
-      <div class="title">Home Assistant broker</div>
-      <div class="sub" style="margin:6px 0 0">
+      <div class="title" data-i18n="mqtt_title">Home Assistant broker</div>
+      <div class="sub" style="margin:6px 0 0" data-i18n="mqtt_sub">
         Optional. MQTT broker address for auto-discovery.
       </div>
-      <label for="mq-host">Broker host</label>
+      <label for="mq-host" data-i18n="lbl_broker_host">Broker host</label>
       <input id="mq-host" placeholder="192.168.1.10" autocomplete="off" />
-      <label for="mq-port">Port</label>
+      <label for="mq-port" data-i18n="lbl_port">Port</label>
       <input id="mq-port" inputmode="numeric" placeholder="1883" autocomplete="off" />
-      <label for="mq-user">Username</label>
-      <input id="mq-user" placeholder="(optional)" autocomplete="off" />
-      <label for="mq-pw">Password</label>
+      <label for="mq-user" data-i18n="lbl_user">Username</label>
+      <input id="mq-user" data-i18n-ph="ph_user" placeholder="(optional)" autocomplete="off" />
+      <label for="mq-pw" data-i18n="lbl_password">Password</label>
       <input id="mq-pw" type="password" autocomplete="off" />
       <div class="hint" id="mq-pw-hint"></div>
-      <button id="mqtt-btn">Save &amp; continue</button>
+      <button id="mqtt-btn" data-i18n="save_continue">Save &amp; continue</button>
       <div class="row">
-        <button class="secondary" data-back>Back</button>
-        <button class="secondary" data-skip>Skip</button>
+        <button class="secondary" data-back data-i18n="back">Back</button>
+        <button class="secondary" data-skip data-i18n="skip">Skip</button>
       </div>
       <div class="msg" id="mqtt-msg"></div>
     </div>
@@ -128,51 +136,51 @@
     <!-- 3. PlayStation wake -->
     <div class="card hidden" id="screen-ps">
       <div class="steps" id="steps-ps"></div>
-      <div class="title">Controller wake</div>
-      <div class="sub" style="margin:6px 0 0">
+      <div class="title" data-i18n="ps_title">Controller wake</div>
+      <div class="sub" style="margin:6px 0 0" data-i18n="ps_sub">
         Register the BC250 and your controllers so they can wake it. A PlayStation
         controller then wakes it with the PS button alone; an Xbox or other BLE
         controller wakes it when turned on. Registration never pairs a controller
         to this device, so it keeps its pairing with the BC250.
       </div>
-      <div class="hint" style="color:var(--err); margin-top:10px">
+      <div class="hint" style="color:var(--err); margin-top:10px" data-i18n="ps_warn">
         Do not pair a PlayStation controller to this device with Create + PS (PS5)
         or SHARE + PS (PS4): that replaces its pairing with the BC250. Use only the
         steps below.
       </div>
 
       <div style="margin-top:18px">
-        <div class="title" style="font-size:14px">1. Register the BC250</div>
-        <div class="scanning" id="ps-host-state">Checking…</div>
-        <button class="secondary" id="ps-power-btn">Turn BC250 on</button>
-        <div class="hint">
+        <div class="title" style="font-size:14px" data-i18n="ps_step1">1. Register the BC250</div>
+        <div class="scanning" id="ps-host-state" data-i18n="ps_host_checking">Checking…</div>
+        <button class="secondary" id="ps-power-btn" data-i18n="btn_turn_on">Turn BC250 on</button>
+        <div class="hint" data-i18n="ps_host_hint">
           On the BC250, open Steam → Settings → Bluetooth and select
-          <b>BC250 Power Setup</b>. Steam will report that it could not connect —
+          BC250 Power Setup. Steam will report that it could not connect —
           that is expected, and the address is captured anyway.
         </div>
         <div class="hidden" id="ps-found">
-          <label for="ps-found-addr">BC250 address seen</label>
+          <label for="ps-found-addr" data-i18n="lbl_ps_found">BC250 address seen</label>
           <input id="ps-found-addr" readonly />
-          <button id="ps-save-host">Save this BC250</button>
+          <button id="ps-save-host" data-i18n="ps_save_host">Save this BC250</button>
         </div>
         <div class="summary" id="ps-host-saved"></div>
       </div>
 
       <div style="margin-top:20px">
-        <div class="title" style="font-size:14px">2. Register controllers</div>
-        <div class="hint">
+        <div class="title" style="font-size:14px" data-i18n="ps_step2">2. Register controllers</div>
+        <div class="hint" data-i18n="ps_step2_hint">
           Shut the BC250 down from Steam first, then continue. On the next screen,
           turn on each controller one at a time — a PlayStation controller with its
           PS button, an Xbox controller with its small pairing button (top edge,
           next to the USB port) until it flashes quickly.
         </div>
-        <button id="ps-controller-step" disabled>Continue to controller step</button>
-        <button class="secondary hidden" id="ps-force-off">Force power off</button>
+        <button id="ps-controller-step" disabled data-i18n="ps_controller_step">Continue to controller step</button>
+        <button class="secondary hidden" id="ps-force-off" data-i18n="ps_force_off">Force power off</button>
       </div>
 
       <div class="row">
-        <button class="secondary" data-back>Back</button>
-        <button class="secondary" data-skip>Skip</button>
+        <button class="secondary" data-back data-i18n="back">Back</button>
+        <button class="secondary" data-skip data-i18n="skip">Skip</button>
       </div>
       <div class="msg" id="ps-msg"></div>
     </div>
@@ -180,20 +188,20 @@
     <!-- 4. Controller -->
     <div class="card hidden" id="screen-dev">
       <div class="steps" id="steps-dev"></div>
-      <div class="title">Select up to 4 controllers</div>
-      <div class="sub" style="margin:6px 0 0">
+      <div class="title" data-i18n="dev_title">Select up to 4 controllers</div>
+      <div class="sub" style="margin:6px 0 0" data-i18n="dev_sub">
         Optional. Turn controllers on, then tap each device to select or remove it.
       </div>
-      <div class="scanning" id="scan-state">Checking scanner…</div>
-      <button class="secondary" id="rescan-btn">Scan again</button>
+      <div class="scanning" id="scan-state" data-i18n="scan_checking">Checking scanner…</div>
+      <button class="secondary" id="rescan-btn" data-i18n="rescan_btn">Scan again</button>
       <div class="sub" id="classic-hint"></div>
       <div id="dev-list"></div>
-      <label for="manual">Selected MACs (comma-separated, maximum 4)</label>
+      <label for="manual" data-i18n="lbl_manual">Selected MACs (comma-separated, maximum 4)</label>
       <input id="manual" placeholder="aa:bb:cc:dd:ee:ff" autocomplete="off" />
-      <button id="save-btn">Save &amp; continue</button>
+      <button id="save-btn" data-i18n="save_continue">Save &amp; continue</button>
       <div class="row">
-        <button class="secondary" data-back>Back</button>
-        <button class="secondary" data-skip>Skip</button>
+        <button class="secondary" data-back data-i18n="back">Back</button>
+        <button class="secondary" data-skip data-i18n="skip">Skip</button>
       </div>
       <div class="msg" id="dev-msg"></div>
     </div>
@@ -201,19 +209,303 @@
     <!-- 5. Done -->
     <div class="card hidden" id="screen-done">
       <div class="steps" id="steps-done"></div>
-      <div class="title">Finish setup</div>
-      <label for="dev-name">Device name (shown in Home Assistant)</label>
+      <div class="title" data-i18n="done_title">Finish setup</div>
+      <label for="dev-name" data-i18n="lbl_dev_name">Device name (shown in Home Assistant)</label>
       <input id="dev-name" placeholder="BC250" autocomplete="off" />
       <div class="summary" id="summary"></div>
-      <button id="finish-btn">Save &amp; reboot</button>
+      <button id="finish-btn" data-i18n="finish_btn">Save &amp; reboot</button>
       <div class="row">
-        <button class="secondary" data-back>Back</button>
+        <button class="secondary" data-back data-i18n="back">Back</button>
       </div>
       <div class="msg" id="done-msg"></div>
     </div>
   </div>
 
   <script>
+    // --- Translations ---
+    // Static strings are applied from data-i18n / data-i18n-ph attributes;
+    // dynamic strings are looked up with t(key, ...args). Values may be plain
+    // strings or functions for parameterised text.
+    const I18N = {
+      en: {
+        subtitle_default: "Setup portal",
+        subtitle_learning: "Controller learning session — press each PS button",
+        subtitle_bound: (b) => "Currently bound: " + b,
+        cannot_reach: (m) => "Cannot reach device: " + m,
+        start_title: "BC250 Switch setup",
+        start_sub: "Configure WiFi, Home Assistant and the wake controller — or wipe the board to hand it on.",
+        start_btn: "Start setup",
+        reset_btn: "Factory reset…",
+        reset_hint: "Erase every stored setting — WiFi, bound controllers and the BC250 address — and reboot into a fresh setup. For handing the board to someone else.",
+        reset_confirm_btn: "Erase everything & reboot",
+        cancel: "Cancel",
+        reset_ok: "Erased. Rebooting into fresh setup…",
+        wifi_title: "Join a WiFi network",
+        wifi_sub: "Optional. Needed for Home Assistant; the button works without it.",
+        wifi_state_loading: "Loading…",
+        lbl_ssid: "Network name",
+        ph_ssid: "SSID (or pick one above)",
+        lbl_wifi_pw: "WiFi password",
+        wol_check: "Wake the machine on LAN magic packets",
+        wol_hint: "Requires this device to be connected to the same network that receives the WoL broadcast.",
+        lbl_wol_mac: "MAC address to enter in your WoL app",
+        wol_mac_hint: "Send the WoL magic packet to this MAC. The ESP32 will turn on the machine when it receives it.",
+        save_continue: "Save & continue",
+        back: "Back",
+        skip: "Skip",
+        wifi_found: (n) => n + " network(s) found at startup",
+        wifi_none: "No networks found — enter one manually.",
+        scan_unavailable: (m) => "Scan unavailable: " + m,
+        pw_saved: "A password is saved. Leave blank to keep it; clear it and save to remove it.",
+        pw_open: "Leave blank for an open network.",
+        pw_anon: "Leave blank if the broker allows anonymous access.",
+        net_open: "open",
+        net_secured: "secured",
+        mqtt_title: "Home Assistant broker",
+        mqtt_sub: "Optional. MQTT broker address for auto-discovery.",
+        lbl_broker_host: "Broker host",
+        lbl_port: "Port",
+        lbl_user: "Username",
+        ph_user: "(optional)",
+        lbl_password: "Password",
+        port_range: "Port must be 1–65535.",
+        ps_title: "Controller wake",
+        ps_sub: "Register the BC250 and your controllers so they can wake it. A PlayStation controller then wakes it with the PS button alone; an Xbox or other BLE controller wakes it when turned on. Registration never pairs a controller to this device, so it keeps its pairing with the BC250.",
+        ps_warn: "Do not pair a PlayStation controller to this device with Create + PS (PS5) or SHARE + PS (PS4): that replaces its pairing with the BC250. Use only the steps below.",
+        ps_step1: "1. Register the BC250",
+        ps_host_checking: "Checking…",
+        ps_host_hint: "On the BC250, open Steam → Settings → Bluetooth and select BC250 Power Setup. Steam will report that it could not connect — that is expected, and the address is captured anyway.",
+        lbl_ps_found: "BC250 address seen",
+        ps_save_host: "Save this BC250",
+        ps_step2: "2. Register controllers",
+        ps_step2_hint: "Shut the BC250 down from Steam first, then continue. On the next screen, turn on each controller one at a time — a PlayStation controller with its PS button, an Xbox controller with its small pairing button (top edge, next to the USB port) until it flashes quickly.",
+        ps_controller_step: "Continue to controller step",
+        ps_force_off: "Force power off",
+        btn_turn_on: "Turn BC250 on",
+        btn_turn_off: "Turn BC250 off",
+        host_on: "BC250 is ON",
+        host_off: "BC250 is off",
+        host_discoverable: "discoverable as “BC250 Power Setup”",
+        host_not_discoverable: "not discoverable",
+        host_saved: (a) => "Saved BC250: " + a,
+        host_none: "No BC250 saved yet.",
+        host_error: (m) => "Error: " + m,
+        save_host_ok: "Saved. Now shut the BC250 down and continue to step 2.",
+        controller_step_ok: "Rebooting… reconnect to this AP, then press each controller's PS button when the controller list appears.",
+        dev_title: "Select up to 4 controllers",
+        dev_sub: "Optional. Turn controllers on, then tap each device to select or remove it.",
+        scan_checking: "Checking scanner…",
+        rescan_btn: "Scan again",
+        lbl_manual: "Selected MACs (comma-separated, maximum 4)",
+        rescan_restarting: "Restarting scan… Selected controllers are kept.",
+        rescan_error: (m) => "Rescan error: " + m,
+        scan_restarting: "Restarting scan…",
+        scan_scanning: "Scanning",
+        scan_stopped: "Scanner stopped; retrying…",
+        scan_none_yet: "No advertisements received yet",
+        scan_last: (s) => "Last received " + s + "s ago",
+        scan_devices: (c, cap) => c + "/" + cap + " devices",
+        w_scanning: "scanning",
+        w_waiting: "waiting",
+        ble_error: (e) => "BLE error " + e,
+        classic_error: (e) => "Classic error " + e,
+        evictions: (n) => n + " older entries replaced",
+        scan_error: (m) => "Scan error: " + m,
+        classic_only: "This board supports BLE only; PlayStation Classic controllers cannot be discovered.",
+        classic_pssession: "Press the PS button on each PlayStation controller (listed as “PlayStation (PS button)”). Turn on Xbox/BLE controllers too — they appear by address; turn them on one at a time to tell them apart. Select each and save.",
+        classic_default: "Xbox controllers appear here when turned on. For PlayStation controllers, use the PlayStation wake step instead of pairing here.",
+        unknown: "(unknown)",
+        transport_classic: "Gamepad HID",
+        transport_ble: "BLE",
+        max4_remove: "Maximum 4 controllers. Remove one first.",
+        max4: "Maximum 4 controllers.",
+        invalid_macs: "Enter valid MACs separated by commas, or clear to remove all.",
+        dup_mac: "Duplicate MAC address.",
+        rssi_unavailable: "RSSI unavailable",
+        done_title: "Finish setup",
+        lbl_dev_name: "Device name (shown in Home Assistant)",
+        finish_btn: "Save & reboot",
+        finish_ok: "Saved. Rebooting into normal mode…",
+        sum_wifi: "WiFi",
+        sum_wol: "Wake-on-LAN",
+        sum_wolmac: "WoL MAC",
+        sum_broker: "Broker",
+        sum_controllers: "Controllers",
+        sum_bt: "BC250 Bluetooth",
+        disabled: "disabled",
+        enabled: "enabled",
+        none: "none",
+        not_registered: "not registered",
+        no_broker_note: "No broker set — the device will join WiFi but won't appear in Home Assistant.",
+        step: (n, m) => "STEP " + n + " OF " + m,
+      },
+      ko: {
+        subtitle_default: "설정 포털",
+        subtitle_learning: "컨트롤러 학습 세션 — 각 PS 버튼을 누르세요",
+        subtitle_bound: (b) => "현재 등록됨: " + b,
+        cannot_reach: (m) => "장치에 연결할 수 없음: " + m,
+        start_title: "BC250 스위치 설정",
+        start_sub: "WiFi, Home Assistant, 깨우기 컨트롤러를 설정하거나, 보드를 초기화해 다른 사람에게 넘길 수 있습니다.",
+        start_btn: "설정 시작",
+        reset_btn: "공장 초기화…",
+        reset_hint: "저장된 모든 설정(WiFi, 등록된 컨트롤러, BC250 주소)을 지우고 새 설정으로 재부팅합니다. 보드를 다른 사람에게 넘길 때 사용하세요.",
+        reset_confirm_btn: "전부 지우고 재부팅",
+        cancel: "취소",
+        reset_ok: "초기화됨. 새 설정으로 재부팅 중…",
+        wifi_title: "WiFi 네트워크 연결",
+        wifi_sub: "선택 사항. Home Assistant에 필요하며, 없어도 버튼은 동작합니다.",
+        wifi_state_loading: "불러오는 중…",
+        lbl_ssid: "네트워크 이름",
+        ph_ssid: "SSID (또는 위에서 선택)",
+        lbl_wifi_pw: "WiFi 비밀번호",
+        wol_check: "LAN 매직 패킷으로 머신 깨우기",
+        wol_hint: "이 장치가 WoL 브로드캐스트를 받는 같은 네트워크에 연결되어 있어야 합니다.",
+        lbl_wol_mac: "WoL 앱에 입력할 MAC 주소",
+        wol_mac_hint: "이 MAC으로 WoL 매직 패킷을 보내세요. ESP32가 받으면 머신을 켭니다.",
+        save_continue: "저장 후 계속",
+        back: "뒤로",
+        skip: "건너뛰기",
+        wifi_found: (n) => "시작 시 네트워크 " + n + "개 발견",
+        wifi_none: "네트워크를 찾지 못했습니다 — 직접 입력하세요.",
+        scan_unavailable: (m) => "스캔 불가: " + m,
+        pw_saved: "비밀번호가 저장되어 있습니다. 비워 두면 유지되고, 지우고 저장하면 삭제됩니다.",
+        pw_open: "개방 네트워크면 비워 두세요.",
+        pw_anon: "브로커가 익명 접속을 허용하면 비워 두세요.",
+        net_open: "개방",
+        net_secured: "보안",
+        mqtt_title: "Home Assistant 브로커",
+        mqtt_sub: "선택 사항. 자동 검색용 MQTT 브로커 주소.",
+        lbl_broker_host: "브로커 호스트",
+        lbl_port: "포트",
+        lbl_user: "사용자 이름",
+        ph_user: "(선택)",
+        lbl_password: "비밀번호",
+        port_range: "포트는 1–65535 범위여야 합니다.",
+        ps_title: "컨트롤러로 깨우기",
+        ps_sub: "BC250과 컨트롤러를 등록해 깨울 수 있게 합니다. 등록 후 PlayStation 컨트롤러는 PS 버튼만으로, Xbox 등 BLE 컨트롤러는 전원을 켜면 깨웁니다. 등록은 컨트롤러를 이 장치에 페어링하지 않으므로, BC250과의 페어링은 유지됩니다.",
+        ps_warn: "Create + PS (PS5) 또는 SHARE + PS (PS4)로 PlayStation 컨트롤러를 이 장치에 페어링하지 마세요. BC250과의 페어링이 대체됩니다. 아래 단계만 사용하세요.",
+        ps_step1: "1. BC250 등록",
+        ps_host_checking: "확인 중…",
+        ps_host_hint: "BC250에서 Steam → 설정 → Bluetooth를 열고 BC250 Power Setup을 선택하세요. Steam이 연결하지 못했다고 표시하는데, 정상이며 주소는 그대로 캡처됩니다.",
+        lbl_ps_found: "감지된 BC250 주소",
+        ps_save_host: "이 BC250 저장",
+        ps_step2: "2. 컨트롤러 등록",
+        ps_step2_hint: "먼저 Steam에서 BC250을 종료한 뒤 계속하세요. 다음 화면에서 컨트롤러를 하나씩 켜세요 — PlayStation은 PS 버튼으로, Xbox는 작은 페어링 버튼(윗면 USB 포트 옆)을 빠르게 깜빡일 때까지 누르세요.",
+        ps_controller_step: "컨트롤러 단계로 계속",
+        ps_force_off: "강제 종료",
+        btn_turn_on: "BC250 켜기",
+        btn_turn_off: "BC250 끄기",
+        host_on: "BC250 켜짐",
+        host_off: "BC250 꺼짐",
+        host_discoverable: "“BC250 Power Setup”으로 검색 가능",
+        host_not_discoverable: "검색 불가",
+        host_saved: (a) => "저장된 BC250: " + a,
+        host_none: "저장된 BC250 없음.",
+        host_error: (m) => "오류: " + m,
+        save_host_ok: "저장됨. 이제 BC250을 종료하고 2단계로 진행하세요.",
+        controller_step_ok: "재부팅 중… 이 AP에 다시 연결한 뒤, 컨트롤러 목록이 나오면 각 컨트롤러의 PS 버튼을 누르세요.",
+        dev_title: "컨트롤러 최대 4개 선택",
+        dev_sub: "선택 사항. 컨트롤러를 켠 뒤, 각 장치를 눌러 선택하거나 해제하세요.",
+        scan_checking: "스캐너 확인 중…",
+        rescan_btn: "다시 스캔",
+        lbl_manual: "선택된 MAC (쉼표 구분, 최대 4개)",
+        rescan_restarting: "스캔 재시작 중… 선택한 컨트롤러는 유지됩니다.",
+        rescan_error: (m) => "재스캔 오류: " + m,
+        scan_restarting: "스캔 재시작 중…",
+        scan_scanning: "스캔 중",
+        scan_stopped: "스캐너 중지됨, 재시도 중…",
+        scan_none_yet: "아직 수신된 광고 없음",
+        scan_last: (s) => s + "초 전 마지막 수신",
+        scan_devices: (c, cap) => "장치 " + c + "/" + cap,
+        w_scanning: "스캔 중",
+        w_waiting: "대기",
+        ble_error: (e) => "BLE 오류 " + e,
+        classic_error: (e) => "Classic 오류 " + e,
+        evictions: (n) => "오래된 항목 " + n + "개 교체됨",
+        scan_error: (m) => "스캔 오류: " + m,
+        classic_only: "이 보드는 BLE만 지원합니다. PlayStation Classic 컨트롤러는 검색할 수 없습니다.",
+        classic_pssession: "각 PlayStation 컨트롤러의 PS 버튼을 누르세요(“PlayStation (PS button)”으로 표시). Xbox/BLE 컨트롤러도 켜세요 — 주소로 표시되며, 구분을 위해 하나씩 켜세요. 각각 선택 후 저장하세요.",
+        classic_default: "Xbox 컨트롤러는 켜면 여기에 나타납니다. PlayStation 컨트롤러는 여기서 페어링하지 말고 PlayStation 깨우기 단계를 사용하세요.",
+        unknown: "(알 수 없음)",
+        transport_classic: "게임패드 HID",
+        transport_ble: "BLE",
+        max4_remove: "컨트롤러는 최대 4개입니다. 먼저 하나를 제거하세요.",
+        max4: "컨트롤러는 최대 4개입니다.",
+        invalid_macs: "쉼표로 구분된 올바른 MAC을 입력하거나, 모두 비워 제거하세요.",
+        dup_mac: "중복된 MAC 주소.",
+        rssi_unavailable: "RSSI 없음",
+        done_title: "설정 완료",
+        lbl_dev_name: "장치 이름 (Home Assistant에 표시)",
+        finish_btn: "저장 후 재부팅",
+        finish_ok: "저장됨. 일반 모드로 재부팅 중…",
+        sum_wifi: "WiFi",
+        sum_wol: "Wake-on-LAN",
+        sum_wolmac: "WoL MAC",
+        sum_broker: "브로커",
+        sum_controllers: "컨트롤러",
+        sum_bt: "BC250 Bluetooth",
+        disabled: "비활성",
+        enabled: "활성",
+        none: "없음",
+        not_registered: "미등록",
+        no_broker_note: "브로커 미설정 — WiFi에는 연결되지만 Home Assistant에는 나타나지 않습니다.",
+        step: (n, m) => m + "단계 중 " + n,
+      },
+    };
+
+    let lang = "en";
+    try {
+      const saved = localStorage.getItem("bc250_lang");
+      lang = saved || (navigator.language && navigator.language.toLowerCase().startsWith("ko") ? "ko" : "en");
+    } catch (e) { /* storage blocked */ }
+
+    function t(key, ...args) {
+      const table = I18N[lang] || I18N.en;
+      let v = table[key];
+      if (v === undefined) v = I18N.en[key];
+      if (v === undefined) return key;
+      return typeof v === "function" ? v(...args) : v;
+    }
+
+    const $ = (id) => document.getElementById(id);
+
+    function applyI18n() {
+      document.querySelectorAll("[data-i18n]").forEach((el) => {
+        el.textContent = t(el.dataset.i18n);
+      });
+      document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+        el.placeholder = t(el.dataset.i18nPh);
+      });
+    }
+
+    function applyPwHints() {
+      $("wifi-pw-hint").textContent = settings.wifiPassSet ? t("pw_saved") : t("pw_open");
+      $("mq-pw-hint").textContent = settings.mqttPassSet ? t("pw_saved") : t("pw_anon");
+    }
+
+    function applySubtitle() {
+      if (psSession) $("subtitle").textContent = t("subtitle_learning");
+      else if (boundGlobal.length) $("subtitle").textContent = t("subtitle_bound", boundGlobal.join(", "));
+      else $("subtitle").textContent = t("subtitle_default");
+    }
+
+    function setLang(l) {
+      lang = l === "ko" ? "ko" : "en";
+      try { localStorage.setItem("bc250_lang", lang); } catch (e) { /* ignore */ }
+      document.documentElement.lang = lang;
+      $("lang-en").classList.toggle("on", lang === "en");
+      $("lang-ko").classList.toggle("on", lang === "ko");
+      applyI18n();
+      applyPwHints();
+      applySubtitle();
+      // Re-render the current screen's dynamic text (step label, pollers, summary).
+      if (SCREENS.includes(current)) show(current);
+    }
+
+    $("lang-en").onclick = () => setLang("en");
+    $("lang-ko").onclick = () => setLang("ko");
+
+    // --- State ---
     const SCREENS = ["wifi", "mqtt", "ps", "dev", "done"];
     let current = "wifi";
     let selected = [];       // up to four controller MACs
@@ -222,10 +514,9 @@
     let devPollGeneration = 0;
     let settings = {};
     let psSession = false;   // this boot is a spoofed controller-learning session
+    let boundGlobal = [];    // controllers currently bound, for the subtitle
     let hostTimer = null;
     let hostPsuOn = false;
-
-    const $ = (id) => document.getElementById(id);
 
     async function api(path, method = "GET", body = null) {
       const headers = {};
@@ -247,7 +538,7 @@
         $("screen-" + s).classList.toggle("hidden", s !== name);
       }
       const i = SCREENS.indexOf(name);
-      $("steps-" + name).textContent = "STEP " + (i + 1) + " OF " + SCREENS.length;
+      $("steps-" + name).textContent = t("step", i + 1, SCREENS.length);
       // "Back" is always available now: from the first step it returns to the
       // launcher screen (see goBack).
       const back = $("screen-" + name).querySelector("[data-back]");
@@ -301,7 +592,7 @@
 
       const rs = document.createElement("div");
       rs.className = "rssi";
-      if (rssi === -127) rs.append("RSSI unavailable");
+      if (rssi === -127) rs.append(t("rssi_unavailable"));
       else rs.append(rssiBars(rssi), document.createElement("br"), rssi + " dBm");
 
       el.append(nm, rs);
@@ -322,12 +613,7 @@
       $("dev-name").value  = settings.deviceName || "";
       selected = settings.wakeAddrs || (settings.wakeAddr ? [settings.wakeAddr] : []);
       $("manual").value = selected.join(", ");
-      $("wifi-pw-hint").textContent = settings.wifiPassSet
-        ? "A password is saved. Leave blank to keep it; clear it and save to remove it."
-        : "Leave blank for an open network.";
-      $("mq-pw-hint").textContent = settings.mqttPassSet
-        ? "A password is saved. Leave blank to keep it; clear it and save to remove it."
-        : "Leave blank if the broker allows anonymous access.";
+      applyPwHints();
       loadWifiList();
     }
 
@@ -339,20 +625,18 @@
     $("wifi-pw").oninput = () => (wifiPwTouched = true);
     $("mq-pw").oninput = () => (mqPwTouched = true);
 
-    // --- 2. WiFi ---
+    // --- 1. WiFi ---
     // The list is a snapshot taken before the AP came up; a live rescan would
     // knock this browser off the AP, so refreshing it means re-entering setup.
     async function loadWifiList() {
       try {
         const data = await api("/api/wifi/scan");
         const list = (data.networks || []).sort((a, b) => b.rssi - a.rssi);
-        $("wifi-state").textContent = list.length
-          ? list.length + " network(s) found at startup"
-          : "No networks found — enter one manually.";
+        $("wifi-state").textContent = list.length ? t("wifi_found", list.length) : t("wifi_none");
         const box = $("wifi-list");
         box.textContent = "";
         for (const n of list) {
-          const el = makeRow(n.ssid, n.open ? "open" : "secured", n.rssi, n.ssid);
+          const el = makeRow(n.ssid, n.open ? t("net_open") : t("net_secured"), n.rssi, n.ssid);
           el.onclick = () => {
             $("wifi-ssid").value = n.ssid;
             $("wifi-pw").focus();
@@ -362,7 +646,7 @@
         }
         refreshWifiSel();
       } catch (e) {
-        $("wifi-state").textContent = "Scan unavailable: " + e.message;
+        $("wifi-state").textContent = t("scan_unavailable", e.message);
       }
     }
 
@@ -399,14 +683,14 @@
       }
     };
 
-    // --- 3. MQTT ---
+    // --- 2. MQTT ---
     $("mqtt-btn").onclick = async () => {
       const msg = $("mqtt-msg");
       msg.className = "msg";
       const host = $("mq-host").value.trim();
       const port = parseInt($("mq-port").value, 10) || 1883;
       if (host && (port < 1 || port > 65535)) {
-        msg.className = "msg err"; msg.textContent = "Port must be 1–65535."; return;
+        msg.className = "msg err"; msg.textContent = t("port_range"); return;
       }
       const body = { host, port, user: $("mq-user").value.trim() };
       if (mqPwTouched) body.password = $("mq-pw").value;
@@ -443,28 +727,28 @@
       try {
         await api("/api/ble/rescan", "POST");
         $("dev-list").textContent = "";
-        $("scan-state").textContent = "Restarting scan… Selected controllers are kept.";
+        $("scan-state").textContent = t("rescan_restarting");
         await pollDevices();
       } catch (e) {
-        $("scan-state").textContent = "Rescan error: " + e.message;
+        $("scan-state").textContent = t("rescan_error", e.message);
       } finally {
         button.disabled = false;
       }
     };
 
     function scanStatus(data, count) {
-      const status = data.restarting ? "Restarting scan…"
-        : data.scanning ? "Scanning" : "Scanner stopped; retrying…";
-      const lastSeen = data.lastSeenAgeMs == null ? "No advertisements received yet"
-        : "Last received " + Math.floor(data.lastSeenAgeMs / 1000) + "s ago";
-      const parts = [status, count + "/" + data.capacity + " devices", lastSeen];
+      const status = data.restarting ? t("scan_restarting")
+        : data.scanning ? t("scan_scanning") : t("scan_stopped");
+      const lastSeen = data.lastSeenAgeMs == null ? t("scan_none_yet")
+        : t("scan_last", Math.floor(data.lastSeenAgeMs / 1000));
+      const parts = [status, t("scan_devices", count, data.capacity), lastSeen];
       if (data.classicSupported) {
-        parts.push("BLE: " + (data.bleScanning ? "scanning" : "waiting") +
-          ", Classic: " + (data.classicScanning ? "scanning" : "waiting"));
-        if (data.bleError) parts.push("BLE error " + data.bleError);
-        if (data.classicError) parts.push("Classic error " + data.classicError);
+        parts.push("BLE: " + (data.bleScanning ? t("w_scanning") : t("w_waiting")) +
+          ", Classic: " + (data.classicScanning ? t("w_scanning") : t("w_waiting")));
+        if (data.bleError) parts.push(t("ble_error", data.bleError));
+        if (data.classicError) parts.push(t("classic_error", data.classicError));
       }
-      if (data.evictions) parts.push(data.evictions + " older entries replaced");
+      if (data.evictions) parts.push(t("evictions", data.evictions));
       if (data.scanError) parts.push(data.scanError);
       return parts.join(" · ");
     }
@@ -479,20 +763,20 @@
         const list = (data.devices || []).sort((a, b) => b.rssi - a.rssi);
         $("scan-state").textContent = scanStatus(data, list.length);
         $("classic-hint").textContent = !data.classicSupported
-          ? "This board supports BLE only; PlayStation Classic controllers cannot be discovered."
+          ? t("classic_only")
           : data.psSession
-          ? "Press the PS button on each PlayStation controller (listed as “PlayStation (PS button)”). Turn on Xbox/BLE controllers too — they appear by address; turn them on one at a time to tell them apart. Select each and save."
-          : "Xbox controllers appear here when turned on. For PlayStation controllers, use the PlayStation wake step instead of pairing here.";
+          ? t("classic_pssession")
+          : t("classic_default");
         const box = $("dev-list");
         box.textContent = "";
         for (const d of list) {
-          const el = makeRow(d.name || "(unknown)", d.addr + " · " + (d.transport === "classic" ? "Gamepad HID" : "BLE"), d.rssi, d.addr);
+          const el = makeRow(d.name || t("unknown"), d.addr + " · " + (d.transport === "classic" ? t("transport_classic") : t("transport_ble")), d.rssi, d.addr);
           el.onclick = () => {
             try { selected = readSelected(); }
             catch (e) { $("dev-msg").textContent = e.message; return; }
             if (selected.includes(d.addr)) selected = selected.filter(a => a !== d.addr);
             else if (selected.length < 4) selected.push(d.addr);
-            else { $("dev-msg").textContent = "Maximum 4 controllers. Remove one first."; return; }
+            else { $("dev-msg").textContent = t("max4_remove"); return; }
             $("dev-msg").textContent = "";
             $("manual").value = selected.join(", ");
             refreshSel();
@@ -502,7 +786,7 @@
         refreshSel();
       } catch (e) {
         if (generation === devPollGeneration && current === "dev")
-          $("scan-state").textContent = "Scan error: " + e.message;
+          $("scan-state").textContent = t("scan_error", e.message);
       } finally {
         devPollBusy = false;
       }
@@ -511,10 +795,10 @@
     function readSelected() {
       const raw = $("manual").value.trim().toLowerCase();
       const addrs = raw ? raw.split(",").map(a => a.trim()) : [];
-      if (addrs.length > 4) throw new Error("Maximum 4 controllers.");
+      if (addrs.length > 4) throw new Error(t("max4"));
       if (addrs.some(a => !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(a)))
-        throw new Error("Enter valid MACs separated by commas, or clear to remove all.");
-      if (new Set(addrs).size !== addrs.length) throw new Error("Duplicate MAC address.");
+        throw new Error(t("invalid_macs"));
+      if (new Set(addrs).size !== addrs.length) throw new Error(t("dup_mac"));
       return addrs;
     }
 
@@ -556,7 +840,7 @@
       }
     };
 
-    // --- PlayStation wake (host identity) ---
+    // --- 3. PlayStation wake (host identity) ---
     function startHostPoll() {
       if (hostTimer) return;
       pollHost();
@@ -572,10 +856,10 @@
         const d = await api("/api/host?learn=1");
         if (current !== "ps") return;
         hostPsuOn = !!d.psuOn;
-        $("ps-power-btn").textContent = d.psuOn ? "Turn BC250 off" : "Turn BC250 on";
+        $("ps-power-btn").textContent = d.psuOn ? t("btn_turn_off") : t("btn_turn_on");
         $("ps-force-off").classList.toggle("hidden", !d.psuOn);
-        const parts = [d.boardUp ? "BC250 is ON" : "BC250 is off"];
-        parts.push(d.learning ? "discoverable as “BC250 Power Setup”" : "not discoverable");
+        const parts = [d.boardUp ? t("host_on") : t("host_off")];
+        parts.push(d.learning ? t("host_discoverable") : t("host_not_discoverable"));
         $("ps-host-state").textContent = parts.join(" · ");
 
         // A freshly captured address (not yet the saved one) is offered to save.
@@ -583,14 +867,12 @@
         $("ps-found").classList.toggle("hidden", !found);
         if (found) $("ps-found-addr").value = d.learned;
 
-        $("ps-host-saved").textContent = d.hostAddr
-          ? "Saved BC250: " + d.hostAddr
-          : "No BC250 saved yet.";
+        $("ps-host-saved").textContent = d.hostAddr ? t("host_saved", d.hostAddr) : t("host_none");
         // The controller step reboots into a spoofed session; it needs a saved
         // BC250 and the board powered down.
         $("ps-controller-step").disabled = !d.hostAddr || d.boardUp;
       } catch (e) {
-        if (current === "ps") $("ps-host-state").textContent = "Error: " + e.message;
+        if (current === "ps") $("ps-host-state").textContent = t("host_error", e.message);
       }
     }
 
@@ -614,7 +896,7 @@
         await api("/api/host/select", "POST", { addr });
         settings.btHost = addr;
         msg.className = "msg ok";
-        msg.textContent = "Saved. Now shut the BC250 down and continue to step 2.";
+        msg.textContent = t("save_host_ok");
         await pollHost();
       } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
     };
@@ -627,27 +909,26 @@
         await api("/api/host/controller-step", "POST", {});
         stopHostPoll();
         msg.className = "msg ok";
-        msg.textContent = "Rebooting… reconnect to this AP, log in, then press each "
-          + "controller's PS button when the controller list appears.";
+        msg.textContent = t("controller_step_ok");
       } catch (e) {
         msg.className = "msg err"; msg.textContent = e.message;
         $("ps-controller-step").disabled = false;
       }
     };
 
-    // --- 6. Done ---
+    // --- 5. Done ---
     function renderSummary() {
       const box = $("summary");
       box.textContent = "";
       const rows = [
-        ["WiFi", settings.wifiSsid || "disabled"],
-        ["Wake-on-LAN", settings.wakeOnLan ? "enabled" : "disabled"],
-        ...(settings.wakeOnLan ? [["WoL MAC", settings.wolMac]] : []),
-        ["Broker", settings.mqttHost
+        [t("sum_wifi"), settings.wifiSsid || t("disabled")],
+        [t("sum_wol"), settings.wakeOnLan ? t("enabled") : t("disabled")],
+        ...(settings.wakeOnLan ? [[t("sum_wolmac"), settings.wolMac]] : []),
+        [t("sum_broker"), settings.mqttHost
           ? settings.mqttHost + ":" + (settings.mqttPort || 1883)
-          : "disabled"],
-        ["Controllers", (settings.wakeAddrs || []).join(", ") || settings.wakeAddr || "none"],
-        ["BC250 Bluetooth", settings.btHost || "not registered"],
+          : t("disabled")],
+        [t("sum_controllers"), (settings.wakeAddrs || []).join(", ") || settings.wakeAddr || t("none")],
+        [t("sum_bt"), settings.btHost || t("not_registered")],
       ];
       for (const [k, v] of rows) {
         const line = document.createElement("div");
@@ -660,7 +941,7 @@
       if (settings.wifiSsid && !settings.mqttHost) {
         const note = document.createElement("div");
         note.className = "hint";
-        note.textContent = "No broker set — the device will join WiFi but won't appear in Home Assistant.";
+        note.textContent = t("no_broker_note");
         box.appendChild(note);
       }
     }
@@ -674,7 +955,7 @@
         await api("/api/finish", "POST", {});
         stopDevPoll();
         msg.className = "msg ok";
-        msg.textContent = "Saved. Rebooting into normal mode…";
+        msg.textContent = t("finish_ok");
       } catch (e) {
         msg.className = "msg err"; msg.textContent = e.message;
         $("finish-btn").disabled = false;
@@ -697,7 +978,7 @@
         $("reset-confirm-btn").disabled = true;
         await api("/api/factory-reset", "POST", {});
         msg.className = "msg ok";
-        msg.textContent = "Erased. Rebooting into fresh setup…";
+        msg.textContent = t("reset_ok");
       } catch (e) {
         msg.className = "msg err"; msg.textContent = e.message;
         $("reset-confirm-btn").disabled = false;
@@ -705,6 +986,7 @@
     };
 
     // --- Boot ---
+    setLang(lang);   // paints static text and the toggle state
     (async () => {
       try {
         const st = await api("/api/status");
@@ -726,17 +1008,14 @@
           const i = SCREENS.indexOf("dev");
           if (i >= 0) SCREENS.splice(i, 1);
         }
-        const bound = st.wakeAddrs || (st.wakeAddr ? [st.wakeAddr] : []);
-        if (psSession)
-          $("subtitle").textContent = "Controller learning session — press each PS button";
-        else if (bound.length)
-          $("subtitle").textContent = "Currently bound: " + bound.join(", ");
+        boundGlobal = st.wakeAddrs || (st.wakeAddr ? [st.wakeAddr] : []);
+        applySubtitle();
         await loadSettings();
         // A spoofed controller-learning session goes straight to the picker;
         // otherwise land on the launcher (Start setup / Factory reset).
         if (psSession) show("dev"); else showStart();
       } catch (e) {
-        $("subtitle").textContent = "Cannot reach device: " + e.message;
+        $("subtitle").textContent = t("cannot_reach", e.message);
       }
     })();
   </script>
