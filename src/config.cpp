@@ -28,6 +28,12 @@ static const char *K_DEV_NAME   = "devName";
 static const char *K_BT_HOST    = "btHost";
 static const char *K_PS_LEARN   = "psLearn";
 
+// Arduino 3 logs a missing key as an error; check first so a fresh or
+// partially provisioned device boots with a clean log.
+static String readString(const char *key) {
+  return prefs.isKey(key) ? prefs.getString(key, "") : String();
+}
+
 void loadConfig() {
   prefs.begin(NS, true);  // read-only
   // Every read carries a default, so a device provisioned before these keys
@@ -36,7 +42,7 @@ void loadConfig() {
   for (auto &addr : config.wakeAddrs) addr = "";
   // New list takes precedence, including an explicitly empty list.
   String stored = prefs.isKey(K_WAKE_ADDRS)
-      ? prefs.getString(K_WAKE_ADDRS, "") : prefs.getString(K_WAKE_ADDR, "");
+      ? readString(K_WAKE_ADDRS) : readString(K_WAKE_ADDR);
   while (!stored.isEmpty() && config.wakeAddrCount < MAX_WAKE_CONTROLLERS) {
     int comma = stored.indexOf(',');
     String addr = comma < 0 ? stored : stored.substring(0, comma);
@@ -52,15 +58,15 @@ void loadConfig() {
   }
   config.wakeAddr = config.wakeAddrCount ? config.wakeAddrs[0] : "";
   config.forceSetup = prefs.getBool(K_FORCE_SETUP, false);
-  config.wifiSsid   = prefs.getString(K_WIFI_SSID, "");
-  config.wifiPass   = prefs.getString(K_WIFI_PASS, "");
+  config.wifiSsid   = readString(K_WIFI_SSID);
+  config.wifiPass   = readString(K_WIFI_PASS);
   config.wakeOnLan  = prefs.getBool(K_WAKE_ON_LAN, false);
-  config.mqttHost   = prefs.getString(K_MQTT_HOST, "");
+  config.mqttHost   = readString(K_MQTT_HOST);
   config.mqttPort   = prefs.getUShort(K_MQTT_PORT, DEFAULT_MQTT_PORT);
-  config.mqttUser   = prefs.getString(K_MQTT_USER, "");
-  config.mqttPass   = prefs.getString(K_MQTT_PASS, "");
-  config.deviceName = prefs.getString(K_DEV_NAME, "");
-  config.btHost     = prefs.getString(K_BT_HOST, "");
+  config.mqttUser   = readString(K_MQTT_USER);
+  config.mqttPass   = readString(K_MQTT_PASS);
+  config.deviceName = readString(K_DEV_NAME);
+  config.btHost     = readString(K_BT_HOST);
   if (!validWakeAddr(config.btHost)) config.btHost = "";
   config.psLearn    = prefs.getBool(K_PS_LEARN, false);
   prefs.end();

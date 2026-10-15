@@ -225,7 +225,9 @@ static void normalBegin() {
   pinMode(BUTTON_SENSE, INPUT_PULLUP);
   if (BOOT_BUTTON_PIN >= 0) pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
 
-  // TPMS1 sense: read as ADC over the full 0-3.3V range.
+  // TPMS1 sense: read as ADC over the full 0-3.3V range. Arduino 3 rejects
+  // attenuation on a pin not yet attached to the ADC; the first read attaches it.
+  analogRead(BOARD_SENSE);
   analogSetPinAttenuation(BOARD_SENSE, ADC_11db);
 
   // Seed debounced states from the current levels.
@@ -293,6 +295,10 @@ void setup() {
   esp_reset_reason_t rr = esp_reset_reason();
   Serial.printf("[INIT] reset reason: %s (%d)\n", resetReasonName(rr), (int)rr);
 
+  if (STATUS_LED_GND_PIN >= 0) {
+    pinMode(STATUS_LED_GND_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_GND_PIN, LOW);
+  }
   if (STATUS_LED_PIN >= 0) {
     pinMode(STATUS_LED_PIN, OUTPUT);
     digitalWrite(STATUS_LED_PIN, STATUS_LED_ACTIVE_HIGH ? LOW : HIGH);

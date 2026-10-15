@@ -10,20 +10,27 @@
 // pins, reserves an ADC1 input for board sense (WiFi-safe), and avoids GPIO6-11
 // which connect to the module's flash.
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
-//   ESP32-C3                      External
+//   ESP32-C3 SuperMini            External
 //   GPIO5 (BUTTON_SENSE)  <------> momentary switch terminal A
 //   GPIO6 (BUTTON_GND)    <------> momentary switch terminal B
+//   GPIO7 (STATUS_LED_GND)<------> status LED cathode
+//   GPIO8 (STATUS_LED_PIN)<------> status LED anode
 //   GPIO4 (PS_ON_PIN)     <------> ATX PS_ON# (green wire, active LOW)
 //   GPIO3 (BOARD_SENSE)   <------> BC250 TPMS1 pin 9 (3.3V = board on)
+// GPIO5-8 are adjacent on the SuperMini header, so the WROOM's 1x4 LED-switch
+// connector (LED+, LED-, contact, contact) plugs in rotated 180 degrees. The
+// board has a single GND pin, taken by the PSU, so the LED cathode returns
+// through GPIO7 driven LOW, the same way BUTTON_GND grounds the switch.
 const int BUTTON_SENSE = 5;
 const int BUTTON_GND   = 6;
 const int PS_ON_PIN    = 4;
 const int BOARD_SENSE  = 3;
-const int BOOT_BUTTON_PIN = -1;  // WROOM-only portal shortcut
-// The DevKitM's user LED is an addressable WS2812, not a plain GPIO, so the
-// simple on/off status LED is disabled here (-1). Point it at a spare GPIO
-// wired to a discrete LED to enable it.
-const int STATUS_LED_PIN = -1;
+const int BOOT_BUTTON_PIN = 9;   // onboard BOOT button, active LOW
+// GPIO8 also drives the SuperMini's onboard blue LED, which is active LOW, so
+// it lights whenever the status LED is dark. It is a strapping pin, but only
+// matters together with GPIO9 held LOW at reset (download mode).
+const int STATUS_LED_PIN = 8;
+const int STATUS_LED_GND_PIN = 7;
 const bool STATUS_LED_ACTIVE_HIGH = true;
 #elif defined(CONFIG_IDF_TARGET_ESP32)
 //   ESP32-WROOM-32                 External
@@ -40,6 +47,7 @@ const int BOOT_BUTTON_PIN = 0;   // onboard BOOT button, active LOW
 // a free, non-strapping output (preferred over GPIO2, which is a boot-strapping
 // pin). Change this if you route the LED elsewhere, or set it to -1 to disable.
 const int STATUS_LED_PIN = 21;
+const int STATUS_LED_GND_PIN = -1;  // cathode goes to a real GND pin
 const bool STATUS_LED_ACTIVE_HIGH = true;
 #else
 #error "Unsupported ESP32 target: define board pin assignments in include/board.h"

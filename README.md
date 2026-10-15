@@ -48,22 +48,29 @@ the board.
 These are **GPIO numbers**, not physical header pin numbers. The firmware definitions
 are in [include/board.h](include/board.h).
 
-| Signal / firmware constant | ESP32-C3 DevKitM-1 | ESP32-WROOM-32 Dev Module | Connects to | Notes |
+| Signal / firmware constant | ESP32-C3 SuperMini | ESP32-WROOM-32 Dev Module | Connects to | Notes |
 |--------|-------------------|-----------------------------|-------------|-------|
 | Button sense (`BUTTON_SENSE`) | GPIO5 | GPIO18 | Momentary switch, terminal A | Read with internal pull-up |
 | Button ground (`BUTTON_GND`) | GPIO6 | GPIO19 | Momentary switch, terminal B | Driven LOW as the switch's ground |
 | PSU control (`PS_ON_PIN`) | GPIO4 | GPIO23 | ATX 24-pin connector pin 16, `PS_ON#` (green wire) | **Open-drain**, active LOW |
 | Board sense (`BOARD_SENSE`) | GPIO3 | GPIO34 | BC250 `TPMS1` pin 9 | ~3.3 V when the board is up, 0 when off |
-| Setup shortcut (`BOOT_BUTTON_PIN`) | Disabled (`-1`) | GPIO0 | Onboard BOOT button | Active LOW; hold 8 s while the BC250 is off |
-| Status LED (`STATUS_LED_PIN`) | Disabled (`-1`) | GPIO21 | Discrete LED anode (cathode to GND) | Active HIGH; `-1` to disable |
+| Setup shortcut (`BOOT_BUTTON_PIN`) | GPIO9 | GPIO0 | Onboard BOOT button | Active LOW; hold 8 s while the BC250 is off |
+| Status LED (`STATUS_LED_PIN`) | GPIO8 | GPIO21 | Discrete LED anode | Active HIGH; `-1` to disable |
+| Status LED ground (`STATUS_LED_GND_PIN`) | GPIO7 | GND (`-1`) | Discrete LED cathode | C3: driven LOW as the LED's ground |
 | ESP power | 5V | Dev board 5V/VIN | ATX 24-pin connector pin 9, `+5VSB` | Permanent standby power for the ESP |
 | Common ground | GND | GND | ATX GND, e.g. pin 17 | Shared by ESP, PSU and BC250 |
 
-For WROOM32, wire the external push-button **between GPIO18 and GPIO19**.
-The C3 equivalent is **GPIO5 and GPIO6**. The C3's addressable onboard LED is
-not driven by the status LED code. The WROOM32 status LED is a discrete LED on
-GPIO21 (a generic DevKit has no usable plain-GPIO onboard LED); change
-`STATUS_LED_PIN` in `include/board.h` to move it, or set it to `-1` to disable it.
+For WROOM32, wire the external push-button **between GPIO18 and GPIO19** and the
+status LED between GPIO21 (anode) and GND (cathode). The 1x4 LED-switch connector
+fits G21, GND, G19, G18 in that order.
+
+The C3 SuperMini has a single GND pin, used by the PSU, so the LED cathode returns
+through **GPIO7** driven LOW, just as GPIO6 grounds the switch. GPIO5-8 sit next to
+each other, so the same 1x4 connector plugs into GPIO5, 6, 7, 8 rotated 180 degrees:
+contacts on GPIO5/6, LED cathode on GPIO7, LED anode on GPIO8. GPIO8 also drives the
+SuperMini's onboard blue LED (active LOW), which therefore lights whenever the status
+LED is dark. Change `STATUS_LED_PIN` / `STATUS_LED_GND_PIN` in `include/board.h` to
+move the LED, or set `STATUS_LED_PIN` to `-1` to disable it.
 
 Use the board-specific pins in the table; do not wire both columns at once. GPIO34 on
 the WROOM32 is input-only and is used for the ADC sense signal. `PS_ON#` idles at ~5 V
@@ -119,11 +126,11 @@ board through the ATX connector.
 | Tap while **off** | Power on |
 | Hold ≥ 5 s while **on** | Force power off |
 | Hold ≥ 8 s while **off** | Enter WiFi setup portal |
-| WROOM32 onboard **BOOT**: hold ≥ 8 s while **off** | Enter WiFi setup portal (GPIO0) |
+| Onboard **BOOT**: hold ≥ 8 s while **off** | Enter WiFi setup portal (WROOM32 GPIO0, C3 GPIO9) |
 
 The button is the primary control and always works, even with no controller configured.
 
-On WROOM32, the BOOT shortcut only enters setup; a short press does nothing.
+The BOOT shortcut only enters setup; a short press does nothing.
 Use it after the ESP32 has booted, with the BC250 off. Release BOOT once setup
 starts. Holding BOOT during power-on or while pressing RST enters the chip's
 download mode instead.

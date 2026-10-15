@@ -576,6 +576,8 @@ void portalBegin() {
   pinMode(BUTTON_GND, OUTPUT);
   digitalWrite(BUTTON_GND, LOW);
   pinMode(BUTTON_SENSE, INPUT_PULLUP);
+  if (BOOT_BUTTON_PIN >= 0) pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  analogRead(BOARD_SENSE);  // attach to the ADC first (Arduino 3)
   analogSetPinAttenuation(BOARD_SENSE, ADC_11db);
 
   // A spoofed boot (chosen in bt_host.cpp from the psLearn flag) is a one-shot
