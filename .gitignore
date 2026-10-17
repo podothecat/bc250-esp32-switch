@@ -6,3 +6,9 @@
 
 # macOS
 .DS_Store
+
+# scripts/publish_site.py staging
+dist/
+
+# wrangler local state
+.wrangler/

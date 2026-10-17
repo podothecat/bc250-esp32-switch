@@ -1,0 +1,1210 @@
+<!doctype html>
+<!--
+  BC250 power log collector. A single self-contained page for people without a
+  dev setup: open it in Chrome or Edge on a PC, plug the ESP32 in over USB, click
+  Connect, reproduce the problem, click Save log, send the file.
+
+  It reads the firmware's serial log through Web Serial (no driver or install
+  beyond the OS's USB-serial driver), flags the known "PSU does not turn off"
+  failure modes live, and saves a timestamped log. Works opened from disk
+  (file://) or hosted. The same page re-analyses a saved log via "Open log".
+
+  When the site published by scripts/publish_site.py is reachable, the page also
+  offers firmware updates: it compares the board's fw= with fw/manifest.json and,
+  only while the BC250 is off, flashes app + portal UI with esptool-js (settings
+  in NVS are kept).
+
+  The analyzer lives in its own script block (id "analyzer") so
+  tests/power_log_host_test.py can run it under node against synthetic logs.
+-->
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BC250 Power Log</title>
+  <!-- Filled in by scripts/publish_site.py so copies opened from disk can update. -->
+  <meta name="bc250-update-base" content="" />
+  <style>
+    :root { --bg:#121212; --card:#1e1e1e; --fg:#eee; --muted:#9e9e9e; --line:#333;
+            --accent:#ffd217; --accent2:#2c6bfd; --err:#ff5252; --ok:#4caf50; --warn:#ffa726; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:ui-monospace,Menlo,Consolas,monospace;
+           background:var(--bg); color:var(--fg); min-height:100vh;
+           display:flex; justify-content:center; align-items:flex-start; }
+    .wrap { width:100%; max-width:760px; padding:24px 16px; }
+    h1 { color:var(--accent); font-size:20px; margin:8px 0 4px; }
+    .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+    .card { background:var(--card); border-radius:12px; padding:18px; margin-bottom:16px; }
+    .title { font-size:15px; font-weight:bold; margin-bottom:10px; }
+    ol { margin:0; padding-left:20px; font-size:13px; line-height:1.8; }
+    button { padding:12px 16px; border:none; border-radius:8px; background:var(--accent);
+             color:#000; font:inherit; font-weight:bold; font-size:14px; cursor:pointer; }
+    button:disabled { opacity:.4; cursor:default; }
+    button.secondary { background:transparent; color:var(--accent2); border:1px solid var(--accent2); }
+    .buttons { display:flex; flex-wrap:wrap; gap:10px; }
+    .link { background:none; border:none; color:var(--muted); padding:0; margin-top:10px;
+            font-size:12px; font-weight:normal; text-decoration:underline; }
+    .hidden { display:none !important; }
+    .err { color:var(--err); }
+    .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
+    .stat { background:#161616; border:1px solid var(--line); border-radius:8px; padding:10px; }
+    .stat .k { color:var(--muted); font-size:11px; }
+    .stat .v { font-size:18px; font-weight:bold; margin-top:4px; overflow-wrap:anywhere; }
+    .stat .v.ok { color:var(--ok); } .stat .v.bad { color:var(--err); } .stat .v.idle { color:var(--muted); }
+    .finding { border-left:3px solid var(--warn); padding:8px 12px; margin-bottom:8px;
+               background:#161616; font-size:13px; line-height:1.6; }
+    .finding.info { border-left-color:var(--muted); color:var(--muted); }
+    .finding .code { font-weight:bold; color:var(--warn); }
+    .finding.info .code { color:var(--muted); }
+    .none { color:var(--ok); font-size:13px; }
+    pre { background:#0b0b0b; border:1px solid var(--line); border-radius:8px; padding:10px;
+          height:280px; overflow:auto; font-size:11px; line-height:1.5; margin:10px 0 0;
+          white-space:pre-wrap; overflow-wrap:anywhere; }
+    .lang { display:flex; gap:6px; justify-content:flex-end; margin-bottom:4px; }
+    .lang button { padding:4px 10px; font-size:12px; font-weight:normal;
+                   background:transparent; color:var(--muted); border:1px solid var(--line); }
+    .lang button.on { color:var(--accent); border-color:var(--accent); }
+    .hint { color:var(--muted); font-size:12px; line-height:1.6; margin-top:10px; }
+    .check { display:flex; align-items:center; gap:8px; margin-top:14px; font-size:13px; }
+    .check input { accent-color:var(--accent); }
+    .overlay { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex;
+               align-items:flex-start; justify-content:center; overflow-y:auto; z-index:10; padding:24px 16px; }
+    .dialog { background:var(--card); border:1px solid var(--line); border-radius:14px;
+              width:100%; max-width:560px; padding:22px; }
+    .phases { display:flex; gap:6px; list-style:none; padding:0; margin:4px 0 18px; counter-reset:ph; }
+    .phases li { flex:1; text-align:center; font-size:11px; color:var(--muted); padding-top:8px;
+                 border-top:4px solid var(--line); counter-increment:ph; }
+    .phases li::before { content:counter(ph) '. '; }
+    .phases li.done { color:var(--ok); border-top-color:var(--ok); }
+    .phases li.now { color:var(--accent); border-top-color:var(--accent); font-weight:bold; }
+    .phases li.err { color:var(--err); border-top-color:var(--err); font-weight:bold; }
+    .instr { font-size:17px; font-weight:bold; line-height:1.5; }
+    .instr.alert { color:var(--accent); font-size:22px; animation:pulse 1.2s ease-in-out infinite; }
+    .instr.ok { color:var(--ok); }
+    .instr-sub { font-size:14px; line-height:1.6; margin-top:8px; }
+    .instr-sub.err { color:var(--err); }
+    ol.press { margin:12px 0 0; padding-left:22px; font-size:15px; line-height:1.7; }
+    ol.press li { margin-bottom:6px; }
+    .live { margin-top:14px; font-size:14px; line-height:1.6; color:var(--muted); min-height:20px; }
+    .live.warn { color:var(--warn); font-weight:bold; }
+    svg.board { display:block; width:100%; max-width:520px; margin:16px auto 0; }
+    svg.board .pcb { fill:#1b3a2a; stroke:#2f6b4c; }
+    svg.board .module { fill:#3a3a3a; stroke:#555; }
+    svg.board .module-t, svg.board .usb-t { fill:#bbb; font-size:13px; text-anchor:middle; }
+    svg.board .usb { fill:#888; }
+    svg.board .hw rect { fill:#444; stroke:#999; stroke-width:1.5; }
+    svg.board .hw text { fill:#eee; font-size:10px; font-weight:bold; text-anchor:middle; }
+    svg.board .hw.hold rect { fill:var(--accent); stroke:var(--accent); }
+    svg.board .hw.hold text { fill:#000; }
+    svg.board .hw.tap rect { fill:var(--accent); stroke:var(--accent); animation:pulse 0.9s ease-in-out infinite; }
+    svg.board .hw.tap text { fill:#000; }
+    svg.board .hw.dont { opacity:.35; }
+    svg.board .lbl { fill:var(--accent); font-size:12px; font-weight:bold; }
+    @keyframes pulse { 50% { opacity:.35; } }
+    @media (prefers-reduced-motion: reduce) { .instr.alert, svg.board .hw.tap rect { animation:none; } }
+    progress { width:100%; height:10px; margin-top:12px; accent-color:var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="lang">
+      <button id="lang-en">EN</button>
+      <button id="lang-ko">한국어</button>
+    </div>
+    <h1>BC250 Switch</h1>
+    <div class="sub" data-i18n="subtitle">전원 로그 수집</div>
+
+    <div class="card hidden" id="unsupported">
+      <div class="title err" data-i18n="unsupported_title">이 브라우저는 지원되지 않습니다</div>
+      <div class="hint" data-i18n="unsupported_body">PC의 Chrome 또는 Edge로 이 파일을 열어 주세요. (Firefox, Safari, 휴대폰은 USB 시리얼을 지원하지 않습니다.)</div>
+    </div>
+
+    <div class="card hidden" id="recover">
+      <div class="title" data-i18n="recover_title">저장하지 않은 이전 기록이 있습니다</div>
+      <div class="buttons">
+        <button id="recover-save" data-i18n="recover_save">이전 기록 저장</button>
+        <button class="secondary" id="recover-drop" data-i18n="recover_drop">버리기</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="title" data-i18n="steps_title">사용 방법</div>
+      <ol>
+        <li data-i18n="step1">ESP32 보드를 USB 케이블로 이 PC에 연결합니다. (BC250 전원 연결은 그대로 둡니다.)</li>
+        <li data-i18n="step2">[연결]을 누르고 목록에서 포트를 고른 뒤 [연결]을 누릅니다.</li>
+        <li data-i18n="step3">이 창을 열어 둔 채로 BC250을 켜고, 평소처럼 사용하다가 종료합니다. 문제가 생길 때까지 반복해도 됩니다.</li>
+        <li data-i18n="step4">종료 후 1분 이상 기다립니다.</li>
+        <li data-i18n="step5">[로그 저장]을 누르고, 저장된 파일을 개발자에게 보내 주세요.</li>
+      </ol>
+      <div class="buttons" style="margin-top:16px">
+        <button id="connect-btn" data-i18n="connect">연결</button>
+        <button class="secondary" id="disconnect-btn" data-i18n="disconnect" disabled>연결 끊기</button>
+        <button id="save-btn" data-i18n="save" disabled>로그 저장</button>
+      </div>
+      <button class="link" id="connect-any" data-i18n="connect_any">목록에 보드가 없나요? 모든 포트 보기</button>
+      <div class="hint err" id="conn-error"></div>
+    </div>
+
+    <div class="card">
+      <div class="title" data-i18n="status_title">현재 상태</div>
+      <div class="stats">
+        <div class="stat"><div class="k" data-i18n="st_conn">USB 연결</div><div class="v idle" id="st-conn">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_state">전원 상태</div><div class="v idle" id="st-state">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_sense">보드 감지 전압</div><div class="v idle" id="st-sense">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_time">기록 시간</div><div class="v idle" id="st-time">-</div></div>
+      </div>
+    </div>
+
+    <div class="card hidden" id="fw-card">
+      <div class="title" data-i18n="fw_title">펌웨어 업데이트</div>
+      <div class="stats">
+        <div class="stat"><div class="k" data-i18n="fw_current">현재 버전</div><div class="v idle" id="fw-current">-</div></div>
+        <div class="stat"><div class="k" data-i18n="fw_latest">최신 버전</div><div class="v idle" id="fw-latest">-</div></div>
+      </div>
+      <label class="check hidden" id="fw-override-row">
+        <input type="checkbox" id="fw-override" /> <span data-i18n="fw_override">BC250 전원이 꺼져 있는 것을 직접 확인했습니다</span>
+      </label>
+      <div class="buttons" style="margin-top:14px">
+        <button id="fw-btn" data-i18n="fw_btn" disabled>업데이트 설치</button>
+      </div>
+      <div class="hint" id="fw-msg"></div>
+      <div class="hint" id="fw-result"></div>
+    </div>
+
+    <!-- Install walkthrough. Shown for every phase except idle; the person's
+         eyes are on the board, so it is large and announces the last step. -->
+    <div class="overlay hidden" id="fw-overlay" role="dialog" aria-modal="true" aria-labelledby="fw-o-title">
+      <div class="dialog">
+        <div class="title" id="fw-o-title" data-i18n="fw_title">펌웨어 업데이트</div>
+        <ol class="phases" id="fw-phases"></ol>
+        <div class="instr" id="fw-instr"></div>
+        <ol class="press" id="fw-press"></ol>
+        <div class="instr-sub" id="fw-instr-sub"></div>
+        <div class="hint" id="fw-board-note" data-i18n="fw_board_note"></div>
+        <svg class="board hidden" id="fw-board" viewBox="0 0 560 200" aria-hidden="true">
+          <rect x="176" y="10" width="208" height="150" rx="8" class="pcb" />
+          <rect x="225" y="22" width="110" height="70" rx="4" class="module" />
+          <text x="280" y="62" class="module-t">ESP32</text>
+          <rect x="258" y="140" width="44" height="40" rx="3" class="usb" />
+          <text x="280" y="196" class="usb-t">USB</text>
+          <g id="fw-btn-en" class="hw">
+            <rect x="186" y="118" width="66" height="32" rx="4" />
+            <text x="219" y="138">RST(EN)</text>
+          </g>
+          <g id="fw-btn-boot" class="hw">
+            <rect x="308" y="118" width="66" height="32" rx="4" />
+            <text x="341" y="138">BOOT(IO0)</text>
+          </g>
+          <text x="178" y="138" class="lbl" id="fw-lbl-en" text-anchor="end"></text>
+          <text x="382" y="138" class="lbl" id="fw-lbl-boot" text-anchor="start"></text>
+        </svg>
+        <progress id="fw-progress" class="hidden" max="1" value="0"></progress>
+        <div class="live" id="fw-hint" aria-live="polite"></div>
+        <div class="buttons" style="margin-top:16px">
+          <button class="secondary hidden" id="fw-start" data-i18n="fw_start">직접 시작</button>
+          <button class="secondary hidden" id="fw-cancel" data-i18n="fw_cancel">취소</button>
+          <button class="hidden" id="fw-retry" data-i18n="fw_retry">다시 시도</button>
+          <button class="hidden" id="fw-close" data-i18n="fw_close">닫기</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="title" data-i18n="findings_title">진단 결과</div>
+      <div id="findings"><div class="none" data-i18n="findings_none">아직 문제 징후가 없습니다.</div></div>
+    </div>
+
+    <div class="card">
+      <div class="title" data-i18n="log_title">기록</div>
+      <div class="buttons">
+        <button class="secondary" id="open-btn" data-i18n="open">로그 파일 열기 (분석)</button>
+        <button class="secondary" id="clear-btn" data-i18n="clear">새로 시작</button>
+      </div>
+      <input type="file" id="open-file" accept=".txt,.log,text/plain" class="hidden" />
+      <pre id="log"></pre>
+    </div>
+  </div>
+
+<script id="analyzer">
+// Mirrors include/board.h; tests/power_log_host_test.py fails if they drift.
+const SENSE_LOW_MV = 800;
+const SENSE_HIGH_MV = 2000;
+
+const HB_RE = /\[HB  \] state=(\w+) board=(\w+) .*?sense: (\d+)mV \((high|low)\)/;
+const ACT_POWER_RE = /\[ACT \] (.+?) -> powering (on|off)/;
+const RESET_RE = /\[INIT\] reset reason: (\S+)/;
+const PORTAL_POWER_RE = /\[PORTAL\] host power (ON|OFF)/;
+const NORMAL_RESETS = new Set(['POWERON', 'SW', 'EXT', 'DEEPSLEEP', 'USB']);
+
+// Consumes firmware log lines with a time in seconds and records findings:
+//   SENSE_DEADBAND  ON while TPMS1 sits between SENSE_LOW_MV and SENSE_HIGH_MV:
+//                   hysteresis holds HIGH, so shutdown is never detected.
+//   SENSE_CHATTER   ON while TPMS1 keeps crossing SENSE_LOW_MV: every bounce
+//                   restarts BOARD_OFF_DEBOUNCE_MS.
+//   SENSE_LOW_NO_OFF ON, TPMS1 low, yet no power-off: firmware logic problem.
+//   PSU_STILL_ON    OFF (PS_ON# released) but the board still reads powered.
+//   SENSE_RESIDUAL  OFF but TPMS1 never falls below SENSE_LOW_MV.
+//   REWAKE          automatic power-on soon after a power-off (BLE/WoL/HA).
+//   PORTAL_PSU_ON   PSU on from the setup portal, which has no shutdown detection.
+//   RESET           abnormal ESP32 reset, or any reset while the board was up.
+class Analyzer {
+  constructor({ lowMv = SENSE_LOW_MV, highMv = SENSE_HIGH_MV, stuckS = 5,
+                offGraceS = 5, rewakeS = 120 } = {}) {
+    Object.assign(this, { lowMv, highMv, stuckS, offGraceS, rewakeS });
+    this.findings = [];
+    this.heartbeats = 0;
+    this.state = null;
+    this.lastHb = null;
+    this.episode = null;     // ON with sense below SENSE_HIGH_MV
+    this.offHigh = null;     // OFF with sense still raw-high
+    this.lastOff = null;     // {t, reason}
+    this.portalPsuOn = false;
+    this.setupMode = false;
+    this.ranges = {};        // state -> [min, max] mV
+  }
+
+  emit(code, t, params = {}, severity = 'warn') {
+    const f = { code, t, params, severity };
+    this.findings.push(f);
+    return [f];
+  }
+
+  feed(t, line) {
+    let m;
+    if ((m = HB_RE.exec(line))) return this.heartbeat(t, m[1], +m[3], m[4] === 'high');
+    if ((m = ACT_POWER_RE.exec(line))) return this.power(t, m[1], m[2] === 'on');
+    if ((m = RESET_RE.exec(line))) return this.reset(t, m[1]);
+    if ((m = PORTAL_POWER_RE.exec(line))) {
+      this.portalPsuOn = m[1] === 'ON';
+      return this.portalPsuOn ? this.emit('PORTAL_PSU_ON', t) : [];
+    }
+    if (line.includes('SETUP MODE ===')) {
+      this.setupMode = true;
+      return this.emit('SETUP_MODE', t, {}, 'info');
+    }
+    return [];
+  }
+
+  heartbeat(t, state, mv, rawHigh) {
+    this.heartbeats++;
+    this.state = state;
+    this.lastHb = { t, state, mv, rawHigh };
+    const r = this.ranges[state] || (this.ranges[state] = [mv, mv]);
+    r[0] = Math.min(r[0], mv); r[1] = Math.max(r[1], mv);
+    let out = [];
+
+    if (state === 'ON' && mv < this.highMv) {
+      const ep = this.episode ||
+        (this.episode = { start: t, min: mv, max: mv, high: 0, low: 0, reported: false });
+      ep.min = Math.min(ep.min, mv); ep.max = Math.max(ep.max, mv);
+      ep[rawHigh ? 'high' : 'low']++;
+      if (!ep.reported && t - ep.start >= this.stuckS) {
+        ep.reported = true;
+        out = out.concat(this.reportEpisode(t, ep));
+      }
+    } else {
+      out = out.concat(this.closeEpisode(t, state === 'ON' ? 'sense_recovered' : null));
+    }
+
+    if (state === 'OFF' && rawHigh) {
+      const oh = this.offHigh || (this.offHigh = { start: t, max: mv, reported: false });
+      oh.max = Math.max(oh.max, mv);
+      // Right after a power-off the sense needs a moment to bleed down.
+      const sinceOff = this.lastOff ? t - this.lastOff.t : Infinity;
+      if (!oh.reported && t - oh.start >= this.offGraceS && sinceOff >= this.offGraceS) {
+        oh.reported = true;
+        out = out.concat(oh.max >= this.highMv
+          ? this.emit('PSU_STILL_ON', t, { mv })
+          : this.emit('SENSE_RESIDUAL', t, { mv, low: this.lowMv }));
+      }
+    } else {
+      this.offHigh = null;
+    }
+    return out;
+  }
+
+  reportEpisode(t, ep) {
+    const p = { min: ep.min, max: ep.max, dur: Math.round(t - ep.start),
+                low: this.lowMv, high: this.highMv, nLow: ep.low, nHigh: ep.high };
+    if (ep.low === 0) return this.emit('SENSE_DEADBAND', t, p);
+    if (ep.high === 0) return this.emit('SENSE_LOW_NO_OFF', t, p);
+    return this.emit('SENSE_CHATTER', t, p);
+  }
+
+  closeEpisode(t, resolvedBy) {
+    const ep = this.episode;
+    this.episode = null;
+    if (ep && ep.reported && resolvedBy)
+      return this.emit('RESOLVED', t, { dur: Math.round(t - ep.start), by: resolvedBy }, 'info');
+    return [];
+  }
+
+  power(t, reason, on) {
+    if (!on) {
+      const out = this.closeEpisode(t, 'power_off');
+      this.lastOff = { t, reason };
+      return out;
+    }
+    if (this.lastOff && t - this.lastOff.t <= this.rewakeS && !reason.startsWith('short press'))
+      return this.emit('REWAKE', t, { after: Math.round(t - this.lastOff.t),
+                                      offReason: this.lastOff.reason, reason });
+    return [];
+  }
+
+  reset(t, reason) {
+    let out = [];
+    if (this.state === 'ON' || this.state === 'BOOTING')
+      out = this.emit('RESET', t, { reason, state: this.state });
+    else if (!NORMAL_RESETS.has(reason))
+      out = this.emit('RESET', t, { reason, state: null });
+    this.state = null; this.episode = null; this.offHigh = null; this.setupMode = false;
+    return out;
+  }
+}
+
+// Time-stamp formats accepted when re-analysing a saved log: this page's own
+// "[2026-10-18 12:00:01.123 +12.345] ", `pio device monitor -f time`, and the
+// bare firmware log (clocked by counting the 1 Hz heartbeats).
+const OWN_TS_RE = /^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \+\s*(\d+(?:\.\d+)?)\] (.*)$/;
+const PIO_TS_RE = /^(\d\d):(\d\d):(\d\d)\.(\d{3}) > (.*)$/;
+
+function analyseText(text, opts) {
+  const an = new Analyzer(opts);
+  let clock = 0, base = null;
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw.startsWith('#')) continue;   // our own header
+    let line = raw, t = null, m;
+    if ((m = OWN_TS_RE.exec(raw))) {
+      t = +m[1]; line = m[2];
+    } else if ((m = PIO_TS_RE.exec(raw))) {
+      t = +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1000;
+      line = m[5];
+      if (base === null) base = t;
+      t -= base;
+      if (t < 0) t += 86400;   // crossed midnight
+    }
+    if (t === null) {
+      if (HB_RE.test(line)) clock += 1;
+      t = clock;
+    }
+    an.feed(t, line);
+  }
+  return an;
+}
+
+if (typeof module !== 'undefined') module.exports = { Analyzer, analyseText, SENSE_LOW_MV, SENSE_HIGH_MV };
+</script>
+
+<script>
+const I18N = {
+  ko: {
+    subtitle: '전원 로그 수집',
+    unsupported_title: '이 브라우저는 지원되지 않습니다',
+    unsupported_body: 'PC의 Chrome 또는 Edge로 이 파일을 열어 주세요. (Firefox, Safari, 휴대폰은 USB 시리얼을 지원하지 않습니다.)',
+    recover_title: '저장하지 않은 이전 기록이 있습니다',
+    recover_save: '이전 기록 저장', recover_drop: '버리기',
+    steps_title: '사용 방법',
+    step1: 'ESP32 보드를 USB 케이블로 이 PC에 연결합니다. (BC250 전원 연결은 그대로 둡니다.)',
+    step2: '[연결]을 누르고 목록에서 포트를 고른 뒤 [연결]을 누릅니다.',
+    step3: '이 창을 열어 둔 채로 BC250을 켜고, 평소처럼 사용하다가 종료합니다. 문제가 생길 때까지 반복해도 됩니다.',
+    step4: '종료 후 1분 이상 기다립니다.',
+    step5: '[로그 저장]을 누르고, 저장된 파일을 개발자에게 보내 주세요.',
+    connect: '연결', disconnect: '연결 끊기', save: '로그 저장',
+    connect_any: '목록에 보드가 없나요? 모든 포트 보기',
+    status_title: '현재 상태', st_conn: 'USB 연결', st_state: '전원 상태',
+    st_sense: '보드 감지 전압', st_time: '기록 시간',
+    findings_title: '진단 결과', findings_none: '아직 문제 징후가 없습니다.',
+    log_title: '기록', open: '로그 파일 열기 (분석)', clear: '새로 시작',
+    conn_connected: '연결됨', conn_waiting: '재연결 대기', conn_none: '안 됨',
+    state_ON: '켜짐', state_OFF: '꺼짐', state_BOOTING: '부팅 중', state_setup: '설정 모드',
+    no_heartbeat: '연결은 되었지만 보드에서 신호가 오지 않습니다. 보드에 펌웨어가 올라가 있는지 확인해 주세요.',
+    err_open: '포트를 열 수 없습니다. 다른 프로그램(시리얼 모니터 등)이 사용 중인지 확인해 주세요.',
+    err_none: '포트를 선택하지 않았습니다. 목록이 비어 있으면 USB 케이블(충전 전용 케이블은 안 됨)과 드라이버를 확인해 주세요.',
+    confirm_clear: '현재 기록을 지우고 새로 시작할까요? 저장하지 않은 내용은 사라집니다.',
+    leave_warning: '저장하지 않은 기록이 있습니다.',
+    fw_title: '펌웨어 업데이트', fw_current: '현재 버전', fw_latest: '최신 버전',
+    fw_unknown: '확인 중', fw_btn: '업데이트 설치',
+    fw_override: 'BC250 전원이 꺼져 있는 것을 직접 확인했습니다',
+    fw_confirm: '펌웨어를 설치합니다. 중간에 ESP32 보드의 버튼을 직접 눌러야 하며, 화면에서 순서를 안내합니다. 2분 정도 걸리고, 끝날 때까지 USB 케이블을 뽑거나 이 창을 닫지 마세요. 설정(WiFi, 컨트롤러)은 그대로 유지됩니다. 계속할까요?',
+    fw_ready: '설치할 수 있습니다.',
+    fw_busy: '설치 중입니다.',
+    fw_need_conn: '먼저 보드를 연결하세요.',
+    fw_uptodate: '이미 최신 버전입니다.',
+    fw_need_off: 'BC250이 꺼져 있을 때만 설치할 수 있습니다. 설치 중 ESP32가 재시작하면서 PSU가 꺼지기 때문입니다.',
+    fw_need_confirm: '보드 상태를 읽을 수 없습니다. BC250 전원이 꺼져 있는지 확인한 뒤 위 항목을 체크하세요.',
+    fw_steps: ['준비', '버튼 누르기', '설치', '재시작', '완료'],
+    fw_i_prepare: '펌웨어를 내려받아 확인하는 중입니다. 아직 아무것도 누르지 마세요.',
+    fw_i_armed: '보드를 설치 모드로 바꿔야 합니다. 아래 순서대로 눌러 주세요.',
+    fw_i_armed_steps: [
+      'ESP32 보드에서 BOOT라고 적힌 버튼(보드에 따라 IO0)을 찾아 꾹 누르고, 계속 누르고 있으세요.',
+      'BOOT를 누른 채로, RST라고 적힌 버튼(보드에 따라 EN)을 한 번 눌렀다 뗍니다.',
+      '이제 BOOT 버튼에서 손을 뗍니다.',
+    ],
+    fw_h_wait: '버튼을 제대로 누르면 자동으로 다음 단계로 넘어갑니다.',
+    fw_h_normal_boot: (n) => `보드가 설치 모드가 아닌 일반 모드로 다시 켜졌습니다 (${n}번째 시도). RST(EN)를 누르고 뗄 때까지 BOOT 버튼을 계속 누르고 있어야 합니다. 1번부터 다시 해 주세요.`,
+    fw_h_slow: '아직 보드 반응이 없습니다. 버튼 이름은 보드에 인쇄된 글씨로 확인하세요. 버튼을 확실히 눌렀는데도 넘어가지 않으면 [직접 시작]을 누르세요.',
+    fw_i_connecting: '보드와 연결하는 중입니다. 이제 버튼에서 손을 떼도 됩니다.',
+    fw_i_writing: '설치 중입니다. USB 케이블을 뽑지 말고 기다려 주세요.',
+    fw_i_reboot: '마지막 단계: RST(EN) 버튼을 한 번 눌렀다 떼 주세요.',
+    fw_i_reboot_sub: 'BOOT 버튼은 누르지 마세요. 누르면 새 펌웨어로 시작하고 자동으로 완료됩니다.',
+    fw_h_boot_held: '보드가 다시 설치 모드로 들어갔습니다. BOOT 버튼에서 손을 떼고, RST(EN) 버튼만 한 번 눌러 주세요.',
+    fw_h_reboot_slow: '아직 재시작되지 않았습니다. ESP32 보드의 RST(EN) 버튼을 한 번 눌러 주세요.',
+    fw_i_done: (v) => `설치가 끝났습니다. 새 펌웨어(${v})로 동작 중입니다. 창을 닫으면 기록이 계속됩니다.`,
+    fw_i_error: '설치하지 못했습니다.',
+    fw_err_download: '펌웨어를 내려받지 못했습니다. 인터넷 연결을 확인해 주세요. 보드는 바뀌지 않았습니다.',
+    fw_err_flash: '설치 중 오류가 났습니다. 보드가 동작하지 않더라도 [다시 시도]로 설치하면 복구됩니다.',
+    fw_err_not_applied: (v) => `보드가 이전 펌웨어${v ? `(${v})` : ''}로 시작했습니다. 설치가 적용되지 않았습니다. [다시 시도]를 눌러 주세요.`,
+    fw_result_done: (v) => `마지막 설치: ${v} 성공`,
+    fw_result_err: '마지막 설치: 실패',
+    fw_start: '직접 시작', fw_cancel: '취소', fw_close: '닫기', fw_retry: '다시 시도',
+    fw_alert: '▶ RST(EN) 버튼을 누르세요',
+    fw_lbl_hold: '1. 누른 채 유지 → 3. 떼기', fw_lbl_tap: '2. 눌렀다 떼기', fw_lbl_press: '한 번 누르기', fw_lbl_dont: '누르지 마세요',
+    fw_board_note: '그림은 예시입니다. 버튼 위치는 보드 종류와 놓인 방향에 따라 다를 수 있으니, 꼭 버튼 옆에 인쇄된 글씨(RST 또는 EN, BOOT 또는 IO0)로 찾으세요.',
+    analysed: (n) => `불러온 파일을 분석했습니다 (${n}줄).`,
+    f: {
+      SENSE_DEADBAND: p => `켜진 상태에서 보드 감지 전압이 ${p.min}–${p.max}mV에 ${p.dur}초 넘게 머물렀습니다. 꺼짐 기준(${p.low}mV)과 켜짐 기준(${p.high}mV) 사이라 보드가 꺼져도 감지하지 못하고 PSU가 계속 켜져 있을 수 있습니다.`,
+      SENSE_CHATTER: p => `켜진 상태에서 보드 감지 전압이 꺼짐 기준(${p.low}mV) 근처에서 오르내립니다 (${p.min}–${p.max}mV). 오르내릴 때마다 꺼짐 판정이 처음부터 다시 시작돼 PSU가 늦게 꺼지거나 안 꺼질 수 있습니다.`,
+      SENSE_LOW_NO_OFF: p => `보드 감지 전압이 꺼짐 기준(${p.low}mV)보다 낮은 상태가 ${p.dur}초 이어졌는데 PSU를 끄지 않았습니다. 펌웨어 문제로 보입니다.`,
+      PSU_STILL_ON: p => `PSU 끄기 신호를 보냈는데도 보드가 여전히 전원을 받고 있습니다 (${p.mv}mV). PS_ON 배선(초록 선)이나 PSU를 확인해야 합니다.`,
+      SENSE_RESIDUAL: p => `꺼진 상태인데도 보드 감지 전압이 ${p.mv}mV로 남아 있습니다 (기준 ${p.low}mV). 다음 종료 때 꺼짐을 감지하지 못할 가능성이 높습니다.`,
+      REWAKE: p => `꺼진 지 ${p.after}초 만에 자동으로 다시 켜졌습니다. 원인: ${reasonText(p.reason)}. (직전 꺼짐: ${p.offReason})`,
+      PORTAL_PSU_ON: () => '설정 화면에서 PSU를 켰습니다. 설정 모드에서는 종료를 감지하지 않으므로, 이 상태에서 BC250을 종료하면 PSU가 꺼지지 않습니다.',
+      RESET: p => p.state ? `보드가 ${p.state === 'ON' ? '켜진' : '부팅 중인'} 상태에서 ESP32가 재시작했습니다 (${p.reason}). 이때 PSU가 강제로 꺼집니다.`
+                          : `ESP32가 비정상적으로 재시작했습니다 (${p.reason}).`,
+      SETUP_MODE: () => '보드가 설정 모드로 시작했습니다.',
+      RESOLVED: p => `감지 전압 이상 상태가 ${p.dur}초 만에 끝났습니다 (${p.by === 'power_off' ? 'PSU 꺼짐' : '전압 정상 복귀'}).`,
+    },
+    reasons: { 'controller present (BLE)': '컨트롤러 신호', 'Wake-on-LAN packet': 'Wake-on-LAN',
+               'Home Assistant switch on': 'Home Assistant' },
+  },
+  en: {
+    subtitle: 'Power log collector',
+    unsupported_title: 'This browser is not supported',
+    unsupported_body: 'Open this file in Chrome or Edge on a PC. (Firefox, Safari and phones have no USB serial support.)',
+    recover_title: 'There is an unsaved log from last time',
+    recover_save: 'Save previous log', recover_drop: 'Discard',
+    steps_title: 'How to use',
+    step1: 'Connect the ESP32 board to this PC with a USB cable. (Leave the BC250 power wiring as is.)',
+    step2: 'Click [Connect], pick the port in the list, then click Connect.',
+    step3: 'Keep this window open, power the BC250 on, use it as usual, then shut it down. Repeat until the problem happens.',
+    step4: 'Wait at least one minute after shutdown.',
+    step5: 'Click [Save log] and send the saved file to the developer.',
+    connect: 'Connect', disconnect: 'Disconnect', save: 'Save log',
+    connect_any: 'Board not in the list? Show all ports',
+    status_title: 'Status', st_conn: 'USB', st_state: 'Power',
+    st_sense: 'Board sense', st_time: 'Recording',
+    findings_title: 'Diagnosis', findings_none: 'No problems seen yet.',
+    log_title: 'Log', open: 'Open log file (analyse)', clear: 'Start over',
+    conn_connected: 'connected', conn_waiting: 'waiting', conn_none: 'no',
+    state_ON: 'on', state_OFF: 'off', state_BOOTING: 'booting', state_setup: 'setup mode',
+    no_heartbeat: 'Connected, but the board sends nothing. Check that it has firmware on it.',
+    err_open: 'Cannot open the port. Make sure no other program (serial monitor) is using it.',
+    err_none: 'No port selected. If the list is empty, check the USB cable (not a charge-only one) and the driver.',
+    confirm_clear: 'Clear the current log and start over? Anything unsaved is lost.',
+    leave_warning: 'There is an unsaved log.',
+    fw_title: 'Firmware update', fw_current: 'Installed', fw_latest: 'Latest',
+    fw_unknown: 'checking', fw_btn: 'Install update',
+    fw_override: 'I have checked that the BC250 is powered off',
+    fw_confirm: 'Install the firmware? Partway through you press buttons on the ESP32 board; the screen walks you through it. It takes about two minutes; do not unplug the USB cable or close this window until it finishes. Settings (WiFi, controllers) are kept.',
+    fw_ready: 'Ready to install.',
+    fw_busy: 'Installing.',
+    fw_need_conn: 'Connect the board first.',
+    fw_uptodate: 'Already up to date.',
+    fw_need_off: 'Install only while the BC250 is off: the ESP32 restarts during the install, which turns the PSU off.',
+    fw_need_confirm: 'The board state cannot be read. Make sure the BC250 is powered off, then tick the box above.',
+    fw_steps: ['Prepare', 'Buttons', 'Install', 'Restart', 'Done'],
+    fw_i_prepare: 'Downloading and checking the firmware. Do not press anything yet.',
+    fw_i_armed: 'The board has to be switched into install mode. Press the buttons in this order.',
+    fw_i_armed_steps: [
+      'On the ESP32 board, find the button labelled BOOT (IO0 on some boards), press it and keep holding it.',
+      'While holding BOOT, press and release the button labelled RST (EN on some boards) once.',
+      'Now let go of BOOT.',
+    ],
+    fw_h_wait: 'Once the buttons are pressed correctly, the next step starts by itself.',
+    fw_h_normal_boot: (n) => `The board restarted normally instead of into install mode (attempt ${n}). Keep BOOT held until RST (EN) has been pressed and released. Start again from step 1.`,
+    fw_h_slow: 'No response from the board yet. Check the button names printed on the board. If you are sure you pressed them and nothing happens, click [Start now].',
+    fw_i_connecting: 'Connecting to the board. You can let go of the buttons now.',
+    fw_i_writing: 'Installing. Do not unplug the USB cable.',
+    fw_i_reboot: 'Last step: press and release the RST (EN) button once.',
+    fw_i_reboot_sub: 'Do not press BOOT. The board then starts the new firmware and the install completes by itself.',
+    fw_h_boot_held: 'The board went back into install mode. Let go of BOOT and press only RST (EN) once.',
+    fw_h_reboot_slow: 'The board has not restarted yet. Press the RST (EN) button on the ESP32 board once.',
+    fw_i_done: (v) => `Done. The board is running the new firmware (${v}). Close this window to keep logging.`,
+    fw_i_error: 'The install did not complete.',
+    fw_err_download: 'Could not download the firmware. Check the internet connection. The board was not changed.',
+    fw_err_flash: 'An error occurred while installing. Even if the board does not start, [Try again] restores it.',
+    fw_err_not_applied: (v) => `The board started the old firmware${v ? ` (${v})` : ''}; the install did not take. Click [Try again].`,
+    fw_result_done: (v) => `Last install: ${v} succeeded`,
+    fw_result_err: 'Last install: failed',
+    fw_start: 'Start now', fw_cancel: 'Cancel', fw_close: 'Close', fw_retry: 'Try again',
+    fw_alert: '▶ Press the RST (EN) button',
+    fw_lbl_hold: '1. hold → 3. release', fw_lbl_tap: '2. press once', fw_lbl_press: 'press once', fw_lbl_dont: 'do not press',
+    fw_board_note: 'The picture is only an example. Button positions depend on the board model and how it is mounted, so find them by the labels printed next to them (RST or EN, BOOT or IO0).',
+    analysed: (n) => `Analysed the opened file (${n} lines).`,
+    f: {
+      SENSE_DEADBAND: p => `While on, the board sense sat at ${p.min}-${p.max} mV for over ${p.dur}s, between the off threshold (${p.low} mV) and the on threshold (${p.high} mV). A shutdown is not detected there, so the PSU can stay on.`,
+      SENSE_CHATTER: p => `While on, the board sense keeps crossing the off threshold (${p.low} mV; ${p.min}-${p.max} mV). Each bounce restarts the off debounce, so the PSU turns off late or never.`,
+      SENSE_LOW_NO_OFF: p => `The board sense stayed below the off threshold (${p.low} mV) for ${p.dur}s but the PSU was not turned off. Looks like a firmware problem.`,
+      PSU_STILL_ON: p => `PS_ON was released but the board is still powered (${p.mv} mV). Check the PS_ON wire (green) and the PSU.`,
+      SENSE_RESIDUAL: p => `Off, yet the board sense stays at ${p.mv} mV (threshold ${p.low} mV). The next shutdown will likely be missed.`,
+      REWAKE: p => `Turned back on automatically ${p.after}s after powering off. Cause: ${reasonText(p.reason)}. (Previous off: ${p.offReason})`,
+      PORTAL_PSU_ON: () => 'The PSU was switched on from the setup screen. Setup mode does not detect shutdown, so shutting the BC250 down there leaves the PSU on.',
+      RESET: p => p.state ? `The ESP32 restarted while the board was ${p.state} (${p.reason}). That hard-cuts the PSU.`
+                          : `The ESP32 restarted abnormally (${p.reason}).`,
+      SETUP_MODE: () => 'The board started in setup mode.',
+      RESOLVED: p => `The sense anomaly ended after ${p.dur}s (${p.by === 'power_off' ? 'PSU turned off' : 'sense recovered'}).`,
+    },
+    reasons: { 'controller present (BLE)': 'controller signal', 'Wake-on-LAN packet': 'Wake-on-LAN',
+               'Home Assistant switch on': 'Home Assistant' },
+  },
+};
+
+let lang = 'ko';
+const T = (k) => I18N[lang][k];
+const reasonText = (r) => I18N[lang].reasons[r] || r;
+const $ = (id) => document.getElementById(id);
+
+// USB-UART bridges on ESP32 devkits, plus Espressif's native USB (C3).
+const ESP_FILTERS = [0x10c4, 0x1a86, 0x0403, 0x303a].map((v) => ({ usbVendorId: v }));
+const STORE_KEY = 'bc250_power_log';
+const STORE_MAX = 4_000_000;   // chars; localStorage is ~5 MB per origin
+
+let analyzer = new Analyzer();
+let lines = [];        // saved-format log lines
+let startedAt = null;  // Date of the first line
+let t0 = 0;            // performance.now() at the first line
+let dirty = false;
+let port = null, reader = null, keepReading = false, connectedAt = 0, readDone = null;
+let lastStore = 0;
+
+function applyLang(next) {
+  lang = next;
+  document.documentElement.lang = lang;
+  try { localStorage.setItem('bc250_lang', lang); } catch (e) { /* ignore */ }
+  $('lang-en').classList.toggle('on', lang === 'en');
+  $('lang-ko').classList.toggle('on', lang === 'ko');
+  for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = T(el.dataset.i18n);
+  renderFindings();
+  renderStatus();
+}
+
+function findingText(f) { return I18N[lang].f[f.code](f.params); }
+
+function renderFindings() {
+  const box = $('findings');
+  box.textContent = '';
+  if (!analyzer.findings.some((f) => f.severity === 'warn')) {
+    const d = document.createElement('div');
+    d.className = 'none';
+    d.textContent = T('findings_none');
+    box.appendChild(d);
+  }
+  for (const f of analyzer.findings) {
+    const d = document.createElement('div');
+    d.className = 'finding' + (f.severity === 'info' ? ' info' : '');
+    const c = document.createElement('div');
+    c.className = 'code';
+    c.textContent = `${f.code} · ${fmtElapsed(f.t)}`;
+    d.appendChild(c);
+    d.appendChild(document.createTextNode(findingText(f)));
+    box.appendChild(d);
+  }
+}
+
+function fmtElapsed(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = s % 60;
+  return (h ? h + ':' : '') + String(m).padStart(h ? 2 : 1, '0') + ':' + String(sec).padStart(2, '0');
+}
+
+function setStat(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = 'v ' + (cls || '');
+}
+
+function renderStatus() {
+  const live = !!port && keepReading;
+  setStat('st-conn', live ? T('conn_connected') : port ? T('conn_waiting') : T('conn_none'),
+          live ? 'ok' : 'idle');
+  const hb = analyzer.lastHb;
+  if (analyzer.setupMode) setStat('st-state', T('state_setup'), 'bad');
+  else if (hb) setStat('st-state', T('state_' + hb.state) || hb.state, hb.state === 'OFF' ? 'idle' : 'ok');
+  else setStat('st-state', '-', 'idle');
+  setStat('st-sense', hb ? `${hb.mv} mV` : '-', 'idle');
+  setStat('st-time', startedAt ? fmtElapsed((performance.now() - t0) / 1000) : '-', 'idle');
+  $('disconnect-btn').disabled = !port;
+  $('save-btn').disabled = lines.length === 0;
+  renderFw();
+}
+
+function pad(n, w = 2) { return String(n).padStart(w, '0'); }
+function stamp(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+const logView = { pending: [] };
+function appendView(text) {
+  logView.pending.push(text);
+}
+setInterval(() => {
+  if (!logView.pending.length) return;
+  const el = $('log');
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  el.textContent += logView.pending.join('\n') + '\n';
+  logView.pending = [];
+  // Keep the view light; the full log lives in `lines`.
+  if (el.textContent.length > 200_000) el.textContent = el.textContent.slice(-150_000);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}, 250);
+
+function record(line) {
+  const now = new Date();
+  if (!startedAt) { startedAt = now; t0 = performance.now(); }
+  const t = (performance.now() - t0) / 1000;
+  const saved = `[${stamp(now)} +${t.toFixed(3)}] ${line}`;
+  lines.push(saved);
+  dirty = true;
+  appendView(saved);
+  const fw = FW_RE.exec(line);
+  if (fw) fwCurrent = fw[1];
+  if (manifest) fwOnLine(line);
+  const found = analyzer.feed(t, line);
+  if (found.length) renderFindings();
+  if (performance.now() - lastStore > 10_000) persist();
+}
+
+// Crash insurance: an accidentally closed tab can still save its log next time.
+function persist() {
+  lastStore = performance.now();
+  try {
+    let text = lines.join('\n');
+    if (text.length > STORE_MAX) text = text.slice(-STORE_MAX);
+    localStorage.setItem(STORE_KEY, text);
+  } catch (e) { /* storage full or blocked: the in-memory log still works */ }
+}
+
+function buildFile(text, an) {
+  const head = [
+    '# BC250 power log',
+    `# saved: ${stamp(new Date())}`,
+    `# browser: ${navigator.userAgent}`,
+    `# thresholds: SENSE_LOW_MV=${an.lowMv} SENSE_HIGH_MV=${an.highMv}`,
+    `# heartbeats: ${an.heartbeats}`,
+    ...Object.entries(an.ranges).map(([s, [lo, hi]]) => `# sense while ${s}: ${lo}-${hi} mV`),
+    '# findings:',
+    ...(an.findings.length ? an.findings.map((f) => `#   [+${f.t.toFixed(1)}s] ${f.code}: ${findingText(f)}`)
+                           : ['#   (none)']),
+    '# ---',
+  ];
+  return head.join('\n') + '\n' + text + '\n';
+}
+
+function download(content) {
+  const d = new Date();
+  const name = `bc250-power-log-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+               `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.txt`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+}
+
+async function openPort(p, quiet = false) {
+  $('conn-error').textContent = '';
+  try {
+    await p.open({ baudRate: 115200 });
+  } catch (e) {
+    if (!quiet) $('conn-error').textContent = T('err_open') + ` (${e.message})`;
+    return;
+  }
+  // Release RTS before DTR. On ESP32 devkits RTS-asserted-without-DTR pulls EN
+  // low and resets the chip, and a reset floats PS_ON#, which would cut the PSU
+  // under a running board. Dropping RTS first never passes through that state.
+  try {
+    await p.setSignals({ requestToSend: false });
+    await p.setSignals({ dataTerminalReady: false });
+  } catch (e) { /* some adapters lack control lines */ }
+  port = p;
+  keepReading = true;
+  connectedAt = performance.now();
+  fwCurrent = null;
+  record(`[diag] connected ${describe(p)}`);
+  renderStatus();
+  readDone = readLoop(p);
+}
+
+// Stop the read loop and wait until it has closed the port.
+async function stopReading() {
+  keepReading = false;
+  if (reader) { try { await reader.cancel(); } catch (e) { /* ignore */ } }
+  if (readDone) await readDone;
+}
+
+function describe(p) {
+  const i = p.getInfo();
+  return i.usbVendorId ? `usb ${i.usbVendorId.toString(16)}:${(i.usbProductId || 0).toString(16)}` : 'port';
+}
+
+async function readLoop(p) {
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (keepReading && p.readable) {
+    reader = p.readable.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n');
+        buf = parts.pop();
+        for (const part of parts) record(part.replace(/\r$/, ''));
+      }
+    } catch (e) {
+      break;   // unplugged or device error
+    } finally {
+      reader.releaseLock();
+      reader = null;
+    }
+  }
+  keepReading = false;
+  try { await p.close(); } catch (e) { /* already gone */ }
+  record('[diag] disconnected');
+  persist();
+  renderStatus();
+}
+
+async function disconnect() {
+  const p = port;
+  port = null;
+  await stopReading();
+  if (p && !p.readable) { try { await p.close(); } catch (e) { /* ignore */ } }
+  renderStatus();
+}
+
+// --- Firmware update ---
+// The site publishes fw/manifest.json (scripts/publish_site.py). When the page
+// is served from that site the base is its own URL; a copy opened from disk
+// uses the base baked into the meta tag at publish time.
+const UPDATE_BASE = (() => {
+  if (location.protocol === 'https:' || location.protocol === 'http:') return new URL('./', location.href);
+  const meta = document.querySelector('meta[name="bc250-update-base"]');
+  return meta && meta.content ? new URL(meta.content) : null;
+})();
+const ESPTOOL_JS = 'esptool-js-0.5.4.mjs';
+const FW_RE = /(?:^\[INIT\] |\| )fw=(\S+)/;
+let manifest = null, fwCurrent = null, fwResult = null;
+// Install flow. Many ESP32 devkits cannot be reset into the bootloader over
+// USB, so the person does it by hand (BOOT held, EN tapped) and the page reads
+// the serial log to tell them how it went:
+//   ROM "waiting for download"      -> in install mode, start writing
+//   ROM SPI_FAST_FLASH_BOOT / [INIT] -> restarted normally: BOOT was let go early
+//   new firmware's fw=<version>      -> install confirmed
+//   idle -> preparing (download + verify) -> armed (waiting for install mode)
+//        -> flashing -> reboot (waiting for EN) -> done | error
+let fwPhase = 'idle', fwSub = null, fwHint = null, fwErr = null, fwBuilds = null;
+let fwPhaseAt = 0, fwNormalBoots = 0, fwLastNormalBoot = 0, fwFrom = null, fwNagged = false;
+let fwTitleTimer = null;
+const DOWNLOAD_MODE_RE = /waiting for download|\(DOWNLOAD/;
+const NORMAL_BOOT_RE = /SPI_FAST_FLASH_BOOT|^\[INIT\] reset reason/;
+const FW_PHASE_STEP = { preparing: 0, armed: 1, flashing: 2, reboot: 3, done: 4 };
+const ARMED_SLOW_MS = 45_000;
+const REBOOT_SLOW_MS = 15_000;
+
+async function loadManifest() {
+  if (!UPDATE_BASE) return;
+  try {
+    const res = await fetch(new URL('fw/manifest.json', UPDATE_BASE), { cache: 'no-store' });
+    if (res.ok) manifest = await res.json();
+  } catch (e) { /* offline or no site: the log collector still works */ }
+  $('fw-card').classList.toggle('hidden', !manifest);
+  renderFw();
+}
+
+function hbFresh() {
+  const hb = analyzer.lastHb;
+  return !!(hb && startedAt && (performance.now() - t0) / 1000 - hb.t < 5);
+}
+
+// Why the install button is disabled right now, or null when it may run.
+function fwBlocker() {
+  if (fwPhase !== 'idle') return 'fw_busy';
+  if (!port || !keepReading) return 'fw_need_conn';
+  if (fwCurrent && fwCurrent === manifest.version) return 'fw_uptodate';
+  const hb = analyzer.lastHb;
+  // Entering the bootloader resets the ESP32, and a reset floats PS_ON#: the PSU
+  // must already be released and the board must not read as running. The bar
+  // is "below SENSE_HIGH_MV", not "below SENSE_LOW_MV": boards whose sense never
+  // falls under SENSE_LOW_MV (SENSE_RESIDUAL) are exactly the ones needing a fix.
+  if (hbFresh()) return hb.state === 'OFF' && hb.mv < SENSE_HIGH_MV ? null : 'fw_need_off';
+  return $('fw-override').checked ? null : 'fw_need_confirm';
+}
+
+function setPhase(phase, sub = null) {
+  if (phase !== fwPhase) { fwPhaseAt = performance.now(); fwHint = null; fwNagged = false; }
+  fwPhase = phase;
+  fwSub = sub;
+  setAlert(phase === 'reboot');
+  if (phase === 'reboot') beep();
+  renderFw();
+}
+
+// Short two-tone chime: the person is looking at the board, not the screen.
+function beep() {
+  try {
+    const ac = new AudioContext();
+    [0, 0.25].forEach((at, i) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.frequency.value = i ? 1175 : 880;
+      g.gain.setValueAtTime(0.15, ac.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + at + 0.2);
+      o.connect(g).connect(ac.destination);
+      o.start(ac.currentTime + at);
+      o.stop(ac.currentTime + at + 0.2);
+    });
+    setTimeout(() => ac.close(), 800);
+  } catch (e) { /* no audio: the dialog still says it */ }
+}
+
+// Blink the tab title so the last step is noticed from another window too.
+function setAlert(on) {
+  if (on && !fwTitleTimer) {
+    const base = document.title;
+    let flip = false;
+    fwTitleTimer = setInterval(() => { flip = !flip; document.title = flip ? T('fw_alert') : base; }, 1000);
+    fwTitleTimer.base = base;
+  } else if (!on && fwTitleTimer) {
+    clearInterval(fwTitleTimer);
+    document.title = fwTitleTimer.base;
+    fwTitleTimer = null;
+  }
+}
+
+function renderFw() {
+  if (!manifest) return;
+  setStat('fw-current', fwCurrent || (port && keepReading ? T('fw_unknown') : '-'), 'idle');
+  setStat('fw-latest', manifest.version, fwCurrent && fwCurrent !== manifest.version ? 'ok' : 'idle');
+  const idle = fwPhase === 'idle';
+  const blocker = fwBlocker();
+  $('fw-override-row').classList.toggle('hidden', !idle || !port || !keepReading || hbFresh());
+  $('fw-btn').disabled = !!blocker;
+  $('fw-msg').textContent = T(blocker || 'fw_ready');
+  const r = $('fw-result');
+  r.textContent = fwResult ? (fwResult.ok ? T('fw_result_done')(fwResult.version) : T('fw_result_err')) : '';
+  r.className = 'hint' + (fwResult && !fwResult.ok ? ' err' : '');
+
+  $('fw-overlay').classList.toggle('hidden', idle);
+  if (idle) return;
+  const elapsed = performance.now() - fwPhaseAt;
+  if (fwPhase === 'armed' && !fwHint && elapsed > ARMED_SLOW_MS) fwHint = { key: 'fw_h_slow' };
+  if (fwPhase === 'reboot' && elapsed > REBOOT_SLOW_MS && !fwNagged) {
+    fwNagged = true;
+    if (!fwHint) fwHint = { key: 'fw_h_reboot_slow' };
+    beep();
+  }
+
+  const step = fwPhase === 'error' ? fwErr.step : FW_PHASE_STEP[fwPhase];
+  const phases = $('fw-phases');
+  phases.textContent = '';
+  T('fw_steps').forEach((name, i) => {
+    const li = document.createElement('li');
+    li.textContent = name;
+    li.className = i < step ? 'done' : i > step ? '' : fwPhase === 'error' ? 'err' : 'now';
+    phases.appendChild(li);
+  });
+
+  const instr = {
+    preparing: T('fw_i_prepare'), armed: T('fw_i_armed'), flashing: T(fwSub || 'fw_i_connecting'),
+    reboot: T('fw_i_reboot'), done: fwPhase === 'done' && T('fw_i_done')(manifest.version), error: T('fw_i_error'),
+  }[fwPhase];
+  $('fw-instr').textContent = instr;
+  $('fw-instr').className = 'instr' + (fwPhase === 'reboot' ? ' alert' : fwPhase === 'done' ? ' ok' : '');
+
+  const press = $('fw-press');
+  press.textContent = '';
+  if (fwPhase === 'armed') for (const s of T('fw_i_armed_steps')) {
+    const li = document.createElement('li');
+    li.textContent = s;
+    press.appendChild(li);
+  }
+
+  let sub = '';
+  if (fwPhase === 'reboot') sub = T('fw_i_reboot_sub');
+  if (fwPhase === 'error') {
+    const msg = T(fwErr.key);
+    sub = (typeof msg === 'function' ? msg(fwErr.arg) : msg) + (fwErr.detail ? ` (${fwErr.detail})` : '');
+  }
+  $('fw-instr-sub').textContent = sub;
+  $('fw-instr-sub').className = 'instr-sub' + (fwPhase === 'error' ? ' err' : '');
+
+  // Board picture: which button to hold, tap, or leave alone.
+  const showBoard = fwPhase === 'armed' || fwPhase === 'reboot';
+  $('fw-board').classList.toggle('hidden', !showBoard);
+  $('fw-board-note').classList.toggle('hidden', !showBoard);
+  const armed = fwPhase === 'armed';
+  $('fw-btn-boot').setAttribute('class', 'hw ' + (armed ? 'hold' : 'dont'));
+  $('fw-btn-en').setAttribute('class', 'hw tap');
+  $('fw-lbl-boot').textContent = T(armed ? 'fw_lbl_hold' : 'fw_lbl_dont');
+  $('fw-lbl-en').textContent = T(armed ? 'fw_lbl_tap' : 'fw_lbl_press');
+
+  $('fw-progress').classList.toggle('hidden', !(fwPhase === 'flashing' && fwSub === 'fw_i_writing'));
+  const h = fwHint ? T(fwHint.key) : fwPhase === 'armed' ? T('fw_h_wait') : '';
+  $('fw-hint').textContent = typeof h === 'function' ? h(fwHint.arg) : h;
+  $('fw-hint').className = 'live' + (fwHint ? ' warn' : '');
+
+  $('fw-start').classList.toggle('hidden', !armed);
+  $('fw-cancel').classList.toggle('hidden', !armed);
+  $('fw-retry').classList.toggle('hidden', fwPhase !== 'error');
+  $('fw-close').classList.toggle('hidden', fwPhase !== 'done' && fwPhase !== 'error');
+}
+
+// Called by record() for every received line; fwCurrent is already updated.
+function fwOnLine(line) {
+  if (fwPhase === 'armed') {
+    if (DOWNLOAD_MODE_RE.test(line)) {
+      flashFirmware();
+    } else if (NORMAL_BOOT_RE.test(line) && performance.now() - fwLastNormalBoot > 3000) {
+      // The ROM line and the firmware's [INIT] line belong to the same restart.
+      fwLastNormalBoot = performance.now();
+      fwHint = { key: 'fw_h_normal_boot', arg: ++fwNormalBoots };
+      renderFw();
+    }
+  } else if (fwPhase === 'reboot') {
+    if (DOWNLOAD_MODE_RE.test(line)) {
+      fwHint = { key: 'fw_h_boot_held' };
+      renderFw();
+    } else if (fwCurrent === manifest.version) {
+      // Phase first: record() feeds this function again.
+      fwResult = { ok: true, version: fwCurrent };
+      setPhase('done');
+      record(`[diag] firmware ${fwCurrent} running`);
+    } else if (/^\[INIT\] state=/.test(line)) {
+      // Firmware finished booting without reporting the new version.
+      failInstall('fw_err_not_applied', null, fwCurrent || fwFrom);
+    }
+  }
+}
+
+function failInstall(key, detail = null, arg = null) {
+  fwErr = { key, detail, arg, step: FW_PHASE_STEP[fwPhase] ?? 0 };
+  fwResult = { ok: false };
+  setPhase('error');   // before record(), which feeds fwOnLine() again
+  record(`[diag] firmware update failed: ${key}${detail ? ' ' + detail : ''}`);
+}
+
+function hex(buf) {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Fetch and verify every build before the board is touched, so a network
+// problem never leaves the ESP32 sitting in its bootloader.
+async function downloadBuilds() {
+  const builds = [];
+  for (const b of manifest.builds) {
+    const parts = [];
+    for (const part of b.parts) {
+      const res = await fetch(new URL(part.path, UPDATE_BASE), { cache: 'no-store' });
+      if (!res.ok) throw new Error(`${part.path}: HTTP ${res.status}`);
+      const data = new Uint8Array(await res.arrayBuffer());
+      if (hex(await crypto.subtle.digest('SHA-256', data)) !== part.sha256)
+        throw new Error(`${part.path}: checksum mismatch`);
+      parts.push({ offset: part.offset, data });
+    }
+    builds.push({ chip: b.chip, parts });
+  }
+  return builds;
+}
+
+// retry: from the error dialog. The board may sit in its bootloader with no
+// heartbeat then, which is fine: a bootloader never drives PS_ON#.
+async function installFirmware(retry = false) {
+  if (retry === true) {
+    if (!port) { fwErr = { key: 'fw_need_conn', step: 0 }; return setPhase('error'); }
+  } else if (fwBlocker() || !confirm(T('fw_confirm'))) {
+    return;
+  }
+  fwErr = null;
+  fwNormalBoots = 0;
+  if (retry !== true) fwFrom = fwCurrent;
+  setPhase('preparing');
+  try {
+    fwBuilds = fwBuilds || await downloadBuilds();
+  } catch (e) {
+    return failInstall('fw_err_download', e.message);
+  }
+  record(`[diag] firmware update ${fwFrom || '?'} -> ${manifest.version}: waiting for install mode`);
+  setPhase('armed');
+}
+
+function cancelInstall() {
+  if (fwPhase !== 'armed') return;
+  record('[diag] firmware update cancelled');
+  setPhase('idle');
+}
+
+async function flashFirmware() {
+  if (fwPhase !== 'armed') return;
+  setPhase('flashing', 'fw_i_connecting');
+  const p = port;
+  const bar = $('fw-progress');
+  await stopReading();
+  let transport = null, ok = false, err = null;
+  try {
+    const { ESPLoader, Transport } = await import(new URL('vendor/' + ESPTOOL_JS, UPDATE_BASE).href);
+    transport = new Transport(p, false);
+    // esptool-js prints progress ("Connecting...") through write() without a
+    // newline; collect it so a stuck connect still shows up in the saved log.
+    let partial = '';
+    const terminal = {
+      clean() {},
+      write: (s) => { partial += s; },
+      writeLine: (s) => { record('[flash] ' + partial + s); partial = ''; },
+    };
+    const loader = new ESPLoader({ transport, baudrate: 460800, romBaudrate: 115200, terminal });
+    // The board should already be in install mode. default_reset still lets
+    // boards with a working auto-reset circuit get there on their own. Bounded
+    // so a board that never answers returns the page to logging.
+    let timer;
+    await Promise.race([
+      loader.main('default_reset'),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('bootloader did not answer within 30s')), 30_000); }),
+    ]).finally(() => {
+      clearTimeout(timer);
+      if (partial) { record('[flash] ' + partial); partial = ''; }
+    });
+    const chip = loader.chip.CHIP_NAME;
+    const build = fwBuilds.find((b) => b.chip === chip);
+    if (!build) throw new Error(`no firmware for ${chip}`);
+    setPhase('flashing', 'fw_i_writing');
+    const total = build.parts.reduce((n, x) => n + x.data.length, 0);
+    const done = build.parts.map(() => 0);
+    await loader.writeFlash({
+      fileArray: build.parts.map((x) => ({ data: loader.ui8ToBstr(x.data), address: x.offset })),
+      flashSize: 'keep', flashMode: 'keep', flashFreq: 'keep',
+      eraseAll: false,   // keeps NVS: WiFi, controllers, every setting
+      compress: true,
+      reportProgress: (i, written, size) => {
+        done[i] = (written / size) * build.parts[i].data.length;
+        bar.value = done.reduce((a, b) => a + b, 0) / total;
+      },
+    });
+    // Restarts boards with an auto-reset circuit; the rest need EN pressed.
+    await loader.after('hard_reset');
+    ok = true;
+    record(`[diag] firmware written (${chip}); waiting for restart`);
+  } catch (e) {
+    err = e;
+  } finally {
+    try { if (transport) await transport.disconnect(); } catch (e) { /* ignore */ }
+    bar.value = 0;
+  }
+  if (ok) setPhase('reboot');
+  else failInstall('fw_err_flash', err.message);
+  // Resume logging, which is also how the restart gets noticed. Native-USB
+  // chips re-enumerate after a reset and come back through 'connect' instead.
+  setTimeout(() => { if (!keepReading) openPort(p, true); }, 300);
+}
+
+async function requestPort(filtered) {
+  try {
+    const p = await navigator.serial.requestPort(filtered ? { filters: ESP_FILTERS } : {});
+    await openPort(p);
+  } catch (e) {
+    if (e.name === 'NotFoundError') $('conn-error').textContent = T('err_none');
+    else $('conn-error').textContent = e.message;
+  }
+}
+
+function startOver() {
+  analyzer = new Analyzer();
+  lines = [];
+  startedAt = null;
+  dirty = false;
+  $('log').textContent = '';
+  logView.pending = [];
+  try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
+  renderFindings();
+  renderStatus();
+}
+
+function init() {
+  let saved = null;
+  try { saved = localStorage.getItem('bc250_lang'); } catch (e) { /* ignore */ }
+  applyLang(saved || ((navigator.language || '').startsWith('ko') ? 'ko' : 'en'));
+  $('lang-en').onclick = () => applyLang('en');
+  $('lang-ko').onclick = () => applyLang('ko');
+
+  let previous = null;
+  try { previous = localStorage.getItem(STORE_KEY); } catch (e) { /* ignore */ }
+  if (previous) {
+    $('recover').classList.remove('hidden');
+    $('recover-save').onclick = () => download(buildFile(previous, analyseText(previous)));
+    $('recover-drop').onclick = () => {
+      try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
+      $('recover').classList.add('hidden');
+    };
+  }
+
+  $('save-btn').onclick = () => {
+    download(buildFile(lines.join('\n'), analyzer));
+    dirty = false;
+    try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
+    $('recover').classList.add('hidden');
+  };
+  $('clear-btn').onclick = () => { if (!dirty || confirm(T('confirm_clear'))) startOver(); };
+  $('open-btn').onclick = () => $('open-file').click();
+  $('open-file').onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    analyzer = analyseText(text);
+    $('log').textContent = text;
+    renderFindings();
+    renderStatus();
+    $('conn-error').textContent = T('analysed')(text.split('\n').length);
+    e.target.value = '';
+  };
+
+  window.addEventListener('beforeunload', (e) => {
+    if (dirty) { persist(); e.preventDefault(); e.returnValue = T('leave_warning'); }
+  });
+
+  if (!('serial' in navigator)) {
+    $('unsupported').classList.remove('hidden');
+    $('connect-btn').disabled = true;
+    $('connect-any').classList.add('hidden');
+    return;
+  }
+  $('connect-btn').onclick = () => requestPort(true);
+  $('connect-any').onclick = () => requestPort(false);
+  $('disconnect-btn').onclick = disconnect;
+
+  // Once a port has been allowed, re-plugging it reconnects without a click.
+  navigator.serial.addEventListener('connect', (e) => {
+    if (fwPhase !== 'flashing' && (!port || !keepReading)) openPort(e.target, true);
+  });
+  $('fw-btn').onclick = installFirmware;
+  $('fw-start').onclick = flashFirmware;
+  $('fw-cancel').onclick = cancelInstall;
+  $('fw-retry').onclick = () => installFirmware(true);
+  $('fw-close').onclick = () => setPhase('idle');
+  $('fw-override').onchange = renderFw;
+  loadManifest();
+  navigator.serial.getPorts().then((ports) => { if (ports.length === 1) openPort(ports[0]); });
+
+  setInterval(() => {
+    renderStatus();
+    if (keepReading && analyzer.heartbeats === 0 && !analyzer.setupMode &&
+        performance.now() - connectedAt > 10_000 && !$('conn-error').textContent)
+      $('conn-error').textContent = T('no_heartbeat');
+    else if (analyzer.heartbeats > 0 && $('conn-error').textContent === T('no_heartbeat'))
+      $('conn-error').textContent = '';
+  }, 1000);
+}
+
+init();
+</script>
+</body>
+</html>
