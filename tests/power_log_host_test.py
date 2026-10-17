@@ -48,6 +48,20 @@ CASES = {
                                    (1, '[INIT] reset reason: BROWNOUT (15)')]),
 }
 
+
+def power_off(after_mv, raw):
+    # 10 s on at 2900 mV, power-off at t=10, then 40 s of the given level.
+    return ([(t, hb('ON', 'UP', 2900, 'high')) for t in range(10)] + [(10, OFF_BY_SENSE)] +
+            [(t, hb('OFF', 'DOWN', after_mv, raw)) for t in range(10, 50)])
+
+
+# name: (warn codes, OFF_TRACE verdicts, lines)
+TRACES = {
+    'trace drop': ([], ['drop'], power_off(60, 'low')),
+    'trace mid': (['SENSE_RESIDUAL', 'OFF_TRACE'], ['mid'], power_off(1200, 'high')),
+    'trace high': (['PSU_STILL_ON', 'OFF_TRACE'], ['high'], power_off(2900, 'high')),
+}
+
 # Saved-file formats: the page's own header + stamps, and a bare firmware log.
 deadband = [hb('ON', 'UP', 1100, 'high') for _ in range(8)]
 TEXTS = {
@@ -58,11 +72,22 @@ TEXTS = {
 
 harness = analyzer + r'''
 const input = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-const out = { cases: {}, texts: {} };
+const out = { cases: {}, texts: {}, traces: {} };
 for (const [name, [, lines]] of Object.entries(input.cases)) {
   const an = new Analyzer();
   for (const [t, line] of lines) an.feed(t, line);
   out.cases[name] = an.findings.filter((f) => f.severity === 'warn').map((f) => f.code);
+}
+for (const [name, [, , lines]] of Object.entries(input.traces)) {
+  const an = new Analyzer();
+  for (const [t, line] of lines) an.feed(t, line);
+  an.finish();
+  const tr = an.findings.filter((f) => f.code === 'OFF_TRACE');
+  out.traces[name] = {
+    warn: an.findings.filter((f) => f.severity === 'warn').map((f) => f.code),
+    verdicts: tr.map((f) => f.params.verdict),
+    before: tr.map((f) => f.params.before),
+  };
 }
 for (const [name, text] of Object.entries(input.texts))
   out.texts[name] = analyseText(text).findings.map((f) => f.code);
@@ -72,12 +97,17 @@ console.log(JSON.stringify(out));
 with tempfile.TemporaryDirectory() as d:
     js = Path(d) / 'harness.js'
     js.write_text(harness, encoding='utf-8')
-    res = subprocess.run(['node', str(js)], input=json.dumps({'cases': CASES, 'texts': TEXTS}),
+    res = subprocess.run(['node', str(js)], input=json.dumps({'cases': CASES, 'texts': TEXTS, 'traces': TRACES}),
                          capture_output=True, text=True, check=True)
 out = json.loads(res.stdout)
 
 for name, (want, _) in CASES.items():
     assert out['cases'][name] == want, f'{name}: {out["cases"][name]} != {want}'
+for name, (warn, verdicts, _) in TRACES.items():
+    got = out['traces'][name]
+    assert got['warn'] == warn, f'{name}: {got["warn"]} != {warn}'
+    assert got['verdicts'] == verdicts, f'{name}: {got["verdicts"]} != {verdicts}'
+    assert got['before'] == [2900], f'{name}: before {got["before"]}'
 for name, got in out['texts'].items():
     assert got == ['SENSE_DEADBAND'], f'{name}: {got}'
 

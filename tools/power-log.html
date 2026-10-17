@@ -67,6 +67,39 @@
     .hint { color:var(--muted); font-size:12px; line-height:1.6; margin-top:10px; }
     .check { display:flex; align-items:center; gap:8px; margin-top:14px; font-size:13px; }
     .check input { accent-color:var(--accent); }
+    .chart-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .chart-head .title { margin:0; }
+    .seg { display:flex; gap:4px; }
+    .seg button { padding:4px 10px; font-size:12px; font-weight:normal; background:transparent;
+                  color:var(--muted); border:1px solid var(--line); }
+    .seg button.on { color:var(--accent); border-color:var(--accent); }
+    .chart-wrap { position:relative; margin-top:12px; touch-action:pan-y; }
+    #chart { display:block; width:100%; height:auto; }
+    #chart .band { fill:var(--accent2); opacity:.12; }
+    #chart .grid { stroke:#2a2a2a; stroke-width:1; }
+    #chart .axis { fill:var(--muted); font-size:11px; font-family:inherit; }
+    #chart .ref { stroke:#8a8a8a; stroke-width:1; stroke-dasharray:4 4; }
+    #chart .ref-t { fill:var(--muted); font-size:11px; font-family:inherit; }
+    #chart .ev { stroke:#6a6a6a; stroke-width:1; }
+    #chart .ev-t { fill:var(--muted); font-size:10px; font-family:inherit; }
+    #chart .line { fill:none; stroke:var(--accent); stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+    #chart .dot { fill:var(--accent); stroke:var(--card); stroke-width:2; }
+    #chart .val { fill:var(--fg); font-size:12px; font-weight:bold; font-family:inherit; }
+    #chart .cross { stroke:var(--fg); stroke-width:1; opacity:.5; }
+    #chart .hit { fill:transparent; cursor:crosshair; }
+    #chart .hidden { display:none; }
+    .tip { position:absolute; pointer-events:none; background:#0b0b0b; border:1px solid var(--line);
+           border-radius:6px; padding:6px 9px; font-size:12px; white-space:nowrap; }
+    .tip b { display:block; font-size:14px; color:var(--fg); }
+    .tip span { color:var(--muted); }
+    .table-wrap { overflow-x:auto; margin-top:8px; }
+    table.traces { width:100%; border-collapse:collapse; font-size:12px; }
+    table.traces th, table.traces td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
+                                       white-space:nowrap; }
+    table.traces th { color:var(--muted); font-weight:normal; }
+    table.traces .n { text-align:right; font-variant-numeric:tabular-nums; }
+    table.traces td.ok { color:var(--ok); }
+    table.traces td.bad { color:var(--warn); font-weight:bold; }
     .overlay { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex;
                align-items:flex-start; justify-content:center; overflow-y:auto; z-index:10; padding:24px 16px; }
     .dialog { background:var(--card); border:1px solid var(--line); border-radius:14px;
@@ -134,7 +167,7 @@
         <li data-i18n="step2">[연결]을 누르고 목록에서 포트를 고른 뒤 [연결]을 누릅니다.</li>
         <li data-i18n="step3">이 창을 열어 둔 채로 BC250을 켜고, 평소처럼 사용하다가 종료합니다. 문제가 생길 때까지 반복해도 됩니다.</li>
         <li data-i18n="step4">종료 후 1분 이상 기다립니다.</li>
-        <li data-i18n="step5">[로그 저장]을 누르고, 저장된 파일을 개발자에게 보내 주세요.</li>
+        <li data-i18n="step5">[로그 저장]을 누르면 압축 파일(.zip)이 저장됩니다. 이 파일을 개발자에게 보내 주세요.</li>
       </ol>
       <div class="buttons" style="margin-top:16px">
         <button id="connect-btn" data-i18n="connect">연결</button>
@@ -142,6 +175,7 @@
         <button id="save-btn" data-i18n="save" disabled>로그 저장</button>
       </div>
       <button class="link" id="connect-any" data-i18n="connect_any">목록에 보드가 없나요? 모든 포트 보기</button>
+      <div class="hint" id="save-msg"></div>
       <div class="hint err" id="conn-error"></div>
     </div>
 
@@ -153,6 +187,35 @@
         <div class="stat"><div class="k" data-i18n="st_sense">보드 감지 전압</div><div class="v idle" id="st-sense">-</div></div>
         <div class="stat"><div class="k" data-i18n="st_time">기록 시간</div><div class="v idle" id="st-time">-</div></div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="chart-head">
+        <div class="title" data-i18n="chart_title">보드 감지 전압 (TPMS1)</div>
+        <div class="seg" id="chart-range" role="group">
+          <button data-range="120" data-i18n="range_2m">2분</button>
+          <button data-range="600" data-i18n="range_10m">10분</button>
+          <button data-range="0" data-i18n="range_all">전체</button>
+        </div>
+      </div>
+      <div class="chart-wrap" id="chart-wrap">
+        <svg id="chart" role="img" aria-labelledby="chart-desc"></svg>
+        <div class="tip hidden" id="chart-tip"><b id="tip-v"></b><span id="tip-s"></span></div>
+      </div>
+      <div class="hint" id="chart-desc" data-i18n="chart_hint">노란 선이 감지 전압, 옅은 띠가 켜져 있던 구간입니다. 전원을 끈 뒤 선이 800mV 점선 아래로 내려가야 정상입니다.</div>
+      <div class="title" style="margin-top:18px" data-i18n="traces_title">전원을 끈 전후의 감지 전압</div>
+      <div class="table-wrap">
+        <table class="traces">
+          <thead><tr>
+            <th data-i18n="tr_time">꺼진 시각</th><th data-i18n="tr_reason">원인</th>
+            <th class="n" data-i18n="tr_before">켜져 있을 때</th><th class="n" data-i18n="tr_s1">1초 후</th>
+            <th class="n" data-i18n="tr_s5">5초 후</th><th class="n" data-i18n="tr_s30">30초 후</th>
+            <th data-i18n="tr_verdict">판정</th>
+          </tr></thead>
+          <tbody id="traces"></tbody>
+        </table>
+      </div>
+      <div class="hint" id="traces-none" data-i18n="traces_none">아직 전원을 끈 기록이 없습니다. BC250을 켰다가 꺼 보세요.</div>
     </div>
 
     <div class="card hidden" id="fw-card">
@@ -220,7 +283,7 @@
         <button class="secondary" id="open-btn" data-i18n="open">로그 파일 열기 (분석)</button>
         <button class="secondary" id="clear-btn" data-i18n="clear">새로 시작</button>
       </div>
-      <input type="file" id="open-file" accept=".txt,.log,text/plain" class="hidden" />
+      <input type="file" id="open-file" accept=".zip,.txt,.log,application/zip,text/plain" class="hidden" />
       <pre id="log"></pre>
     </div>
   </div>
@@ -247,10 +310,21 @@ const NORMAL_RESETS = new Set(['POWERON', 'SW', 'EXT', 'DEEPSLEEP', 'USB']);
 //   REWAKE          automatic power-on soon after a power-off (BLE/WoL/HA).
 //   PORTAL_PSU_ON   PSU on from the setup portal, which has no shutdown detection.
 //   RESET           abnormal ESP32 reset, or any reset while the board was up.
+//   OFF_TRACE       every ON -> OFF transition: the sense while on, then 1/5/30 s
+//                   after power-off, and whether it fell below SENSE_LOW_MV
+//                   (info when it dropped promptly, warn otherwise).
+// It also keeps the heartbeat series and power events for the sense chart.
+const TRACE_S = 30;            // how long a power-off is followed
+const TRACE_BEFORE_S = 30;     // window averaged as "while on"
+const SERIES_MAX = 100_000;    // ~28 h of 1 Hz heartbeats
 class Analyzer {
   constructor({ lowMv = SENSE_LOW_MV, highMv = SENSE_HIGH_MV, stuckS = 5,
                 offGraceS = 5, rewakeS = 120 } = {}) {
     Object.assign(this, { lowMv, highMv, stuckS, offGraceS, rewakeS });
+    this.series = [];        // {t, mv, state} per heartbeat
+    this.events = [];        // {t, kind: 'on' | 'off' | 'reset'}
+    this.trace = null;       // power-off being followed
+    this.wallStart = null;   // Date of t = 0, when known
     this.findings = [];
     this.heartbeats = 0;
     this.state = null;
@@ -287,11 +361,24 @@ class Analyzer {
 
   heartbeat(t, state, mv, rawHigh) {
     this.heartbeats++;
+    const prev = this.state;
     this.state = state;
     this.lastHb = { t, state, mv, rawHigh };
     const r = this.ranges[state] || (this.ranges[state] = [mv, mv]);
     r[0] = Math.min(r[0], mv); r[1] = Math.max(r[1], mv);
+    this.series.push({ t, mv, state });
+    if (this.series.length > SERIES_MAX) this.series.splice(0, this.series.length - SERIES_MAX);
     let out = [];
+
+    if (state === 'OFF' && (prev === 'ON' || prev === 'BOOTING')) {
+      out = out.concat(this.closeTrace());
+      this.openTrace(t);
+    }
+    if (this.trace) {
+      const tr = this.trace;
+      if (state === 'OFF') tr.after.push({ dt: t - tr.t, mv });
+      if (state !== 'OFF' || t - tr.t >= TRACE_S) out = out.concat(this.closeTrace());
+    }
 
     if (state === 'ON' && mv < this.highMv) {
       const ep = this.episode ||
@@ -339,7 +426,37 @@ class Analyzer {
     return [];
   }
 
+  // Starts following a power-off. The firmware logs "[ACT ] ... -> powering off"
+  // just before the first OFF heartbeat, so that line dates the transition.
+  openTrace(t) {
+    const off = this.lastOff && t - this.lastOff.t <= 2 ? this.lastOff : { t, reason: null };
+    // Skip the last few seconds before the power-off: on an OS shutdown the
+    // sense is already falling there, which is not the "on" level.
+    const on = this.series.filter((p) => (p.state === 'ON' || p.state === 'BOOTING') &&
+                                         p.t >= off.t - TRACE_BEFORE_S && p.t < off.t - 3);
+    const before = on.length ? Math.round(on.reduce((n, p) => n + p.mv, 0) / on.length) : null;
+    this.trace = { t: off.t, reason: off.reason, before, after: [] };
+  }
+
+  closeTrace() {
+    const tr = this.trace;
+    this.trace = null;
+    if (!tr || !tr.after.length) return [];
+    const at = (s) => { const p = tr.after.find((x) => x.dt >= s - 0.5); return p ? p.mv : null; };
+    const low = tr.after.find((x) => x.mv < this.lowMv);
+    const last = tr.after[tr.after.length - 1].mv;
+    const verdict = low ? (low.dt <= 5 ? 'drop' : 'slow') : last >= this.highMv ? 'high' : 'mid';
+    return this.emit('OFF_TRACE', tr.t, {
+      reason: tr.reason, before: tr.before, s1: at(1), s5: at(5), s30: at(TRACE_S), last,
+      lowAt: low ? Math.round(low.dt) : null, low: this.lowMv, verdict,
+    }, verdict === 'drop' ? 'info' : 'warn');
+  }
+
+  // End of input (saved file): report a power-off that was still being followed.
+  finish() { return this.closeTrace(); }
+
   power(t, reason, on) {
+    this.events.push({ t, kind: on ? 'on' : 'off' });
     if (!on) {
       const out = this.closeEpisode(t, 'power_off');
       this.lastOff = { t, reason };
@@ -352,11 +469,12 @@ class Analyzer {
   }
 
   reset(t, reason) {
-    let out = [];
+    this.events.push({ t, kind: 'reset' });
+    let out = this.closeTrace();
     if (this.state === 'ON' || this.state === 'BOOTING')
-      out = this.emit('RESET', t, { reason, state: this.state });
+      out = out.concat(this.emit('RESET', t, { reason, state: this.state }));
     else if (!NORMAL_RESETS.has(reason))
-      out = this.emit('RESET', t, { reason, state: null });
+      out = out.concat(this.emit('RESET', t, { reason, state: null }));
     this.state = null; this.episode = null; this.offHigh = null; this.setupMode = false;
     return out;
   }
@@ -365,7 +483,7 @@ class Analyzer {
 // Time-stamp formats accepted when re-analysing a saved log: this page's own
 // "[2026-10-18 12:00:01.123 +12.345] ", `pio device monitor -f time`, and the
 // bare firmware log (clocked by counting the 1 Hz heartbeats).
-const OWN_TS_RE = /^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \+\s*(\d+(?:\.\d+)?)\] (.*)$/;
+const OWN_TS_RE = /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}) \+\s*(\d+(?:\.\d+)?)\] (.*)$/;
 const PIO_TS_RE = /^(\d\d):(\d\d):(\d\d)\.(\d{3}) > (.*)$/;
 
 function analyseText(text, opts) {
@@ -375,7 +493,8 @@ function analyseText(text, opts) {
     if (raw.startsWith('#')) continue;   // our own header
     let line = raw, t = null, m;
     if ((m = OWN_TS_RE.exec(raw))) {
-      t = +m[1]; line = m[2];
+      t = +m[2]; line = m[3];
+      if (!an.wallStart) an.wallStart = new Date(new Date(m[1].replace(' ', 'T')).getTime() - t * 1000);
     } else if ((m = PIO_TS_RE.exec(raw))) {
       t = +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1000;
       line = m[5];
@@ -389,6 +508,7 @@ function analyseText(text, opts) {
     }
     an.feed(t, line);
   }
+  an.finish();
   return an;
 }
 
@@ -408,7 +528,16 @@ const I18N = {
     step2: '[연결]을 누르고 목록에서 포트를 고른 뒤 [연결]을 누릅니다.',
     step3: '이 창을 열어 둔 채로 BC250을 켜고, 평소처럼 사용하다가 종료합니다. 문제가 생길 때까지 반복해도 됩니다.',
     step4: '종료 후 1분 이상 기다립니다.',
-    step5: '[로그 저장]을 누르고, 저장된 파일을 개발자에게 보내 주세요.',
+    step5: '[로그 저장]을 누르면 압축 파일(.zip)이 저장됩니다. 이 파일을 개발자에게 보내 주세요.',
+    saved: (name, kb) => `저장했습니다: ${name} (${kb} KB). 이 파일을 개발자에게 보내 주세요.`,
+    chart_title: '보드 감지 전압 (TPMS1)', range_2m: '2분', range_10m: '10분', range_all: '전체',
+    chart_hint: '노란 선이 감지 전압, 옅은 띠가 켜져 있던 구간입니다. 전원을 끈 뒤 선이 800mV 점선 아래로 내려가야 정상입니다.',
+    chart_empty: '보드를 연결하면 그래프가 그려집니다.',
+    chart_off_line: '꺼짐 기준', chart_on_line: '켜짐 기준', ev_on: '켜짐', ev_off: '꺼짐', ev_reset: '재시작',
+    traces_title: '전원을 끈 전후의 감지 전압',
+    traces_none: '아직 전원을 끈 기록이 없습니다. BC250을 켰다가 꺼 보세요.',
+    tr_time: '꺼진 시각', tr_reason: '원인', tr_before: '켜져 있을 때', tr_s1: '1초 후', tr_s5: '5초 후', tr_s30: '30초 후', tr_verdict: '판정',
+    verdict: { drop: '정상 하강', slow: '늦게 하강', mid: '중간값에 머묾', high: '높게 유지', pending: '측정 중' },
     connect: '연결', disconnect: '연결 끊기', save: '로그 저장',
     connect_any: '목록에 보드가 없나요? 모든 포트 보기',
     status_title: '현재 상태', st_conn: 'USB 연결', st_state: '전원 상태',
@@ -473,9 +602,17 @@ const I18N = {
                           : `ESP32가 비정상적으로 재시작했습니다 (${p.reason}).`,
       SETUP_MODE: () => '보드가 설정 모드로 시작했습니다.',
       RESOLVED: p => `감지 전압 이상 상태가 ${p.dur}초 만에 끝났습니다 (${p.by === 'power_off' ? 'PSU 꺼짐' : '전압 정상 복귀'}).`,
+      OFF_TRACE: p => `전원 꺼짐(${reasonText(p.reason || '?')}) 전후 감지 전압: 켜져 있을 때 ${mvText(p.before)} → 1초 후 ${mvText(p.s1)}, 5초 후 ${mvText(p.s5)}, 30초 후 ${mvText(p.s30)}. ` + {
+        drop: '정상적으로 떨어졌습니다.',
+        slow: `꺼짐 기준(${p.low}mV) 아래로 ${p.lowAt}초 만에야 떨어졌습니다.`,
+        mid: `꺼짐 기준(${p.low}mV)보다 높은 ${p.last}mV에 머물렀습니다. 다음 종료를 감지하지 못할 수 있습니다.`,
+        high: `켜져 있을 때 수준(${p.last}mV)에 머물렀습니다. 보드에 아직 전원이 들어가는 것으로 보입니다.`,
+      }[p.verdict],
     },
     reasons: { 'controller present (BLE)': '컨트롤러 신호', 'Wake-on-LAN packet': 'Wake-on-LAN',
-               'Home Assistant switch on': 'Home Assistant' },
+               'Home Assistant switch on': 'Home Assistant', 'Home Assistant switch off': 'Home Assistant',
+               'TPMS1 LOW while ON, board shut down': '보드가 스스로 종료', 'long press (>5s) while ON': '버튼 길게 누름',
+               'boot timed out, board never signalled UP': '부팅 시간 초과', '?': '알 수 없음' },
   },
   en: {
     subtitle: 'Power log collector',
@@ -488,7 +625,16 @@ const I18N = {
     step2: 'Click [Connect], pick the port in the list, then click Connect.',
     step3: 'Keep this window open, power the BC250 on, use it as usual, then shut it down. Repeat until the problem happens.',
     step4: 'Wait at least one minute after shutdown.',
-    step5: 'Click [Save log] and send the saved file to the developer.',
+    step5: 'Click [Save log] to save a compressed file (.zip), then send it to the developer.',
+    saved: (name, kb) => `Saved ${name} (${kb} KB). Send this file to the developer.`,
+    chart_title: 'Board sense (TPMS1)', range_2m: '2 min', range_10m: '10 min', range_all: 'All',
+    chart_hint: 'The yellow line is the board sense; shaded bands are when the board was on. After powering off, the line should fall below the 800 mV dashed line.',
+    chart_empty: 'The chart appears once the board is connected.',
+    chart_off_line: 'off threshold', chart_on_line: 'on threshold', ev_on: 'on', ev_off: 'off', ev_reset: 'reset',
+    traces_title: 'Board sense around each power-off',
+    traces_none: 'No power-off recorded yet. Turn the BC250 on and then off.',
+    tr_time: 'Off at', tr_reason: 'Cause', tr_before: 'While on', tr_s1: '+1 s', tr_s5: '+5 s', tr_s30: '+30 s', tr_verdict: 'Result',
+    verdict: { drop: 'dropped', slow: 'dropped late', mid: 'stuck mid-range', high: 'stayed high', pending: 'measuring' },
     connect: 'Connect', disconnect: 'Disconnect', save: 'Save log',
     connect_any: 'Board not in the list? Show all ports',
     status_title: 'Status', st_conn: 'USB', st_state: 'Power',
@@ -553,15 +699,24 @@ const I18N = {
                           : `The ESP32 restarted abnormally (${p.reason}).`,
       SETUP_MODE: () => 'The board started in setup mode.',
       RESOLVED: p => `The sense anomaly ended after ${p.dur}s (${p.by === 'power_off' ? 'PSU turned off' : 'sense recovered'}).`,
+      OFF_TRACE: p => `Board sense around a power-off (${reasonText(p.reason || '?')}): ${mvText(p.before)} while on -> ${mvText(p.s1)} after 1 s, ${mvText(p.s5)} after 5 s, ${mvText(p.s30)} after 30 s. ` + {
+        drop: 'It dropped as expected.',
+        slow: `It only fell below the off threshold (${p.low} mV) after ${p.lowAt} s.`,
+        mid: `It stayed at ${p.last} mV, above the off threshold (${p.low} mV). The next shutdown may be missed.`,
+        high: `It stayed at the on level (${p.last} mV). The board still seems to be powered.`,
+      }[p.verdict],
     },
     reasons: { 'controller present (BLE)': 'controller signal', 'Wake-on-LAN packet': 'Wake-on-LAN',
-               'Home Assistant switch on': 'Home Assistant' },
+               'Home Assistant switch on': 'Home Assistant', 'Home Assistant switch off': 'Home Assistant',
+               'TPMS1 LOW while ON, board shut down': 'board shut itself down', 'long press (>5s) while ON': 'button long press',
+               'boot timed out, board never signalled UP': 'boot timed out', '?': 'unknown' },
   },
 };
 
 let lang = 'ko';
 const T = (k) => I18N[lang][k];
 const reasonText = (r) => I18N[lang].reasons[r] || r;
+const mvText = (v) => (v === null || v === undefined ? '-' : `${v}mV`);
 const $ = (id) => document.getElementById(id);
 
 // USB-UART bridges on ESP32 devkits, plus Espressif's native USB (C3).
@@ -591,6 +746,7 @@ function applyLang(next) {
 function findingText(f) { return I18N[lang].f[f.code](f.params); }
 
 function renderFindings() {
+  renderTraces();
   const box = $('findings');
   box.textContent = '';
   if (!analyzer.findings.some((f) => f.severity === 'warn')) {
@@ -701,15 +857,262 @@ function buildFile(text, an) {
   return head.join('\n') + '\n' + text + '\n';
 }
 
-function download(content) {
+// --- Saving: a single-entry .zip, which every OS opens without extra tools ---
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+async function pipeBytes(bytes, stream) {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+
+async function makeZip(entryName, text) {
+  const data = new TextEncoder().encode(text);
+  let comp = null;
+  try { comp = await pipeBytes(data, new CompressionStream('deflate-raw')); } catch (e) { /* store instead */ }
+  const method = comp ? 8 : 0;
+  if (!comp) comp = data;
+  const name = new TextEncoder().encode(entryName);
   const d = new Date();
-  const name = `bc250-power-log-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
-               `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.txt`;
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const crc = crc32(data);
+  const local = new DataView(new ArrayBuffer(30));
+  [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, method, 2], [10, time, 2], [12, date, 2],
+   [14, crc, 4], [18, comp.length, 4], [22, data.length, 4], [26, name.length, 2], [28, 0, 2]]
+    .forEach(([o, v, n]) => (n === 4 ? local.setUint32(o, v, true) : local.setUint16(o, v, true)));
+  const central = new DataView(new ArrayBuffer(46));
+  [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, method, 2], [12, time, 2],
+   [14, date, 2], [16, crc, 4], [20, comp.length, 4], [24, data.length, 4], [28, name.length, 2],
+   [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, 0, 4]]
+    .forEach(([o, v, n]) => (n === 4 ? central.setUint32(o, v, true) : central.setUint16(o, v, true)));
+  const end = new DataView(new ArrayBuffer(22));
+  [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, 1, 2], [10, 1, 2], [12, 46 + name.length, 4],
+   [16, 30 + name.length + comp.length, 4], [20, 0, 2]]
+    .forEach(([o, v, n]) => (n === 4 ? end.setUint32(o, v, true) : end.setUint16(o, v, true)));
+  return new Blob([local, name, comp, central, name, end], { type: 'application/zip' });
+}
+
+// Text of the first entry of a .zip, or null when the bytes are not a zip.
+async function readZipText(buf) {
+  const v = new DataView(buf);
+  if (buf.byteLength < 30 || v.getUint32(0, true) !== 0x04034b50) return null;
+  const flags = v.getUint16(6, true), method = v.getUint16(8, true);
+  let size = v.getUint32(18, true);
+  const start = 30 + v.getUint16(26, true) + v.getUint16(28, true);
+  if (flags & 8) {   // sizes live in the central directory (streamed zips)
+    for (let i = buf.byteLength - 22; i >= 0; i--) {
+      if (v.getUint32(i, true) !== 0x06054b50) continue;
+      size = v.getUint32(v.getUint32(i + 16, true) + 20, true);
+      break;
+    }
+  }
+  const comp = new Uint8Array(buf, start, size);
+  if (method === 0) return new TextDecoder().decode(comp);
+  if (method !== 8) throw new Error(`zip method ${method}`);
+  return new TextDecoder().decode(await pipeBytes(comp, new DecompressionStream('deflate-raw')));
+}
+
+async function saveLog(text, an) {
+  const d = new Date();
+  const base = `bc250-power-log-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+               `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const blob = await makeZip(base + '.txt', buildFile(text, an));
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
-  a.download = name;
+  a.href = URL.createObjectURL(blob);
+  a.download = base + '.zip';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  $('save-msg').textContent = T('saved')(base + '.zip', Math.max(1, Math.round(blob.size / 1024)));
+}
+
+// --- Sense chart -----------------------------------------------------------
+// One series (TPMS1 mV per heartbeat) over time, the two hysteresis thresholds
+// as reference lines, shaded bands where the board was on, and power events.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const CHART_H = 240, CHART_M = { l: 48, r: 14, t: 14, b: 26 }, CHART_YMAX = 3300;
+let chartRange = 120;   // seconds shown; 0 = everything
+let chartGeom = null;   // last render's scales, for the hover layer
+
+function svgEl(tag, attrs, parent) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function clockAt(t) {
+  const start = analyzer.wallStart || startedAt;
+  if (!start) return fmtElapsed(t);
+  const d = new Date(start.getTime() + t * 1000);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function nowT() {
+  // Live: the clock keeps moving even between heartbeats. File: the last sample.
+  if (port && keepReading && startedAt && !analyzer.wallStart) return (performance.now() - t0) / 1000;
+  const s = analyzer.series;
+  return s.length ? s[s.length - 1].t : 0;
+}
+
+function renderChart() {
+  const svg = $('chart');
+  const W = Math.max(280, $('chart-wrap').clientWidth);
+  svg.setAttribute('viewBox', `0 0 ${W} ${CHART_H}`);
+  svg.textContent = '';
+  const { l, r, t: top, b } = CHART_M;
+  const pw = W - l - r, ph = CHART_H - top - b;
+  const series = analyzer.series;
+  const tEnd = nowT();
+  const tStart = chartRange ? Math.max(0, tEnd - chartRange) : series.length ? series[0].t : 0;
+  const span = Math.max(10, tEnd - tStart);
+  const x = (tt) => l + ((tt - tStart) / span) * pw;
+  const y = (mv) => top + ph - (Math.min(mv, CHART_YMAX) / CHART_YMAX) * ph;
+  chartGeom = { x, y, tStart, span, l, pw, top, ph };
+  const pts = series.filter((p) => p.t >= tStart - 1);
+
+  // Bands where the board was on (BOOTING counts: PS_ON# is asserted).
+  let bandStart = null;
+  const closeBand = (until) => {
+    if (bandStart === null) return;
+    svgEl('rect', { x: x(Math.max(bandStart, tStart)), y: top, width: Math.max(1, x(until) - x(Math.max(bandStart, tStart))),
+                    height: ph, class: 'band' }, svg);
+    bandStart = null;
+  };
+  for (const p of pts) {
+    const on = p.state === 'ON' || p.state === 'BOOTING';
+    if (on && bandStart === null) bandStart = p.t;
+    if (!on) closeBand(p.t);
+  }
+  closeBand(pts.length ? Math.min(tEnd, pts[pts.length - 1].t + 1) : tEnd);
+
+  // Recessive grid and y labels.
+  for (const v of [0, 1000, 2000, 3000]) {
+    svgEl('line', { x1: l, x2: l + pw, y1: y(v), y2: y(v), class: 'grid' }, svg);
+    svgEl('text', { x: l - 6, y: y(v) + 4, class: 'axis', 'text-anchor': 'end' }, svg).textContent = v;
+  }
+  svgEl('text', { x: 4, y: top - 2, class: 'axis' }, svg).textContent = 'mV';
+
+  // Hysteresis thresholds, labelled at the right end.
+  for (const [v, key] of [[analyzer.lowMv, 'chart_off_line'], [analyzer.highMv, 'chart_on_line']]) {
+    svgEl('line', { x1: l, x2: l + pw, y1: y(v), y2: y(v), class: 'ref' }, svg);
+    svgEl('text', { x: l + pw - 4, y: y(v) - 5, class: 'ref-t', 'text-anchor': 'end' }, svg)
+      .textContent = `${T(key)} ${v}`;
+  }
+
+  // Time axis: four clock ticks.
+  for (let i = 0; i <= 3; i++) {
+    const tt = tStart + (span * i) / 3;
+    svgEl('text', { x: x(tt), y: CHART_H - 6, class: 'axis',
+                    'text-anchor': i === 0 ? 'start' : i === 3 ? 'end' : 'middle' }, svg).textContent = clockAt(tt);
+  }
+
+  // Power events.
+  for (const ev of analyzer.events) {
+    if (ev.t < tStart || ev.t > tEnd) continue;
+    svgEl('line', { x1: x(ev.t), x2: x(ev.t), y1: top, y2: top + ph, class: 'ev ev-' + ev.kind }, svg);
+    svgEl('text', { x: x(ev.t) + 3, y: top + 11, class: 'ev-t' }, svg).textContent = T('ev_' + ev.kind);
+  }
+
+  if (!pts.length) {
+    svgEl('text', { x: l + pw / 2, y: top + ph / 2, class: 'axis', 'text-anchor': 'middle' }, svg)
+      .textContent = T('chart_empty');
+    return;
+  }
+
+  // The series; gaps over 5 s (unplugged, reset) break the line.
+  let d = '', prev = null;
+  for (const p of pts) {
+    d += (prev && p.t - prev.t <= 5 ? 'L' : 'M') + x(Math.max(p.t, tStart)).toFixed(1) + ' ' + y(p.mv).toFixed(1);
+    prev = p;
+  }
+  svgEl('path', { d, class: 'line' }, svg);
+
+  // Latest value, direct-labelled.
+  const last = pts[pts.length - 1];
+  svgEl('circle', { cx: x(last.t), cy: y(last.mv), r: 4, class: 'dot' }, svg);
+  const lx = x(last.t) > l + pw - 70;
+  svgEl('text', { x: x(last.t) + (lx ? -8 : 8), y: y(last.mv) - 8, class: 'val',
+                  'text-anchor': lx ? 'end' : 'start' }, svg).textContent = `${last.mv} mV`;
+
+  // Hover layer: crosshair + tooltip, snapped to the nearest heartbeat.
+  svgEl('line', { id: 'chart-cross', x1: 0, x2: 0, y1: top, y2: top + ph, class: 'cross hidden' }, svg);
+  svgEl('circle', { id: 'chart-hdot', r: 4, class: 'dot hidden' }, svg);
+  svgEl('rect', { x: l, y: top, width: pw, height: ph, class: 'hit' }, svg);
+}
+
+function chartHover(e) {
+  const g = chartGeom;
+  if (!g || !analyzer.series.length) return;
+  const rect = $('chart').getBoundingClientRect();
+  const scale = rect.width / Number($('chart').getAttribute('viewBox').split(' ')[2]);
+  const px = (e.clientX - rect.left) / scale;
+  const tt = g.tStart + ((px - g.l) / g.pw) * g.span;
+  let best = null;
+  for (const p of analyzer.series) if (!best || Math.abs(p.t - tt) < Math.abs(best.t - tt)) best = p;
+  if (!best || best.t < g.tStart - 1) return chartLeave();
+  const cx = g.x(best.t), cy = g.y(best.mv);
+  const cross = $('chart-cross'), dot = $('chart-hdot');
+  if (!cross) return;
+  cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.classList.remove('hidden');
+  dot.setAttribute('cx', cx); dot.setAttribute('cy', cy); dot.classList.remove('hidden');
+  $('tip-v').textContent = `${best.mv} mV`;
+  $('tip-s').textContent = `${clockAt(best.t)} · ${T('state_' + best.state) || best.state}`;
+  const tip = $('chart-tip');
+  tip.classList.remove('hidden');
+  const left = cx * scale;
+  tip.style.left = `${Math.min(Math.max(left - tip.offsetWidth / 2, 0), rect.width - tip.offsetWidth)}px`;
+  tip.style.top = `${Math.max(0, cy * scale - tip.offsetHeight - 12)}px`;
+}
+
+function chartLeave() {
+  $('chart-tip').classList.add('hidden');
+  const cross = $('chart-cross'), dot = $('chart-hdot');
+  if (cross) cross.classList.add('hidden');
+  if (dot) dot.classList.add('hidden');
+}
+
+function renderTraces() {
+  const body = $('traces');
+  body.textContent = '';
+  const traces = analyzer.findings.filter((f) => f.code === 'OFF_TRACE');
+  // A power-off still being followed shows up at once, filling in as it goes.
+  const open = analyzer.trace;
+  if (open && open.after.length) {
+    const at = (s) => { const p = open.after.find((x) => x.dt >= s - 0.5); return p ? p.mv : null; };
+    traces.push({ t: open.t, params: { reason: open.reason, before: open.before, s1: at(1), s5: at(5),
+                                       s30: at(TRACE_S), verdict: 'pending' } });
+  }
+  $('traces-none').classList.toggle('hidden', traces.length > 0);
+  for (const f of traces.slice().reverse()) {
+    const p = f.params;
+    const tr = document.createElement('tr');
+    const cells = [clockAt(f.t), reasonText(p.reason || '?'), mvText(p.before), mvText(p.s1),
+                   mvText(p.s5), mvText(p.s30)];
+    cells.forEach((text, i) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (i >= 2) td.className = 'n';
+      tr.appendChild(td);
+    });
+    const td = document.createElement('td');
+    td.className = p.verdict === 'drop' ? 'ok' : p.verdict === 'pending' ? '' : 'bad';
+    td.textContent = (p.verdict === 'drop' ? '✓ ' : p.verdict === 'pending' ? '… ' : '! ') + T('verdict')[p.verdict];
+    tr.appendChild(td);
+    body.appendChild(tr);
+  }
 }
 
 async function openPort(p, quiet = false) {
@@ -1117,6 +1520,12 @@ async function requestPort(filtered) {
   }
 }
 
+function renderChartRange() {
+  for (const btn of $('chart-range').querySelectorAll('button'))
+    btn.classList.toggle('on', Number(btn.dataset.range) === chartRange);
+  renderChart();
+}
+
 function startOver() {
   analyzer = new Analyzer();
   lines = [];
@@ -1127,6 +1536,7 @@ function startOver() {
   try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
   renderFindings();
   renderStatus();
+  renderChart();
 }
 
 function init() {
@@ -1140,26 +1550,43 @@ function init() {
   try { previous = localStorage.getItem(STORE_KEY); } catch (e) { /* ignore */ }
   if (previous) {
     $('recover').classList.remove('hidden');
-    $('recover-save').onclick = () => download(buildFile(previous, analyseText(previous)));
+    $('recover-save').onclick = () => saveLog(previous, analyseText(previous));
     $('recover-drop').onclick = () => {
       try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
       $('recover').classList.add('hidden');
     };
   }
 
-  $('save-btn').onclick = () => {
-    download(buildFile(lines.join('\n'), analyzer));
+  $('save-btn').onclick = async () => {
+    await saveLog(lines.join('\n'), analyzer);
     dirty = false;
     try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
     $('recover').classList.add('hidden');
   };
   $('clear-btn').onclick = () => { if (!dirty || confirm(T('confirm_clear'))) startOver(); };
   $('open-btn').onclick = () => $('open-file').click();
+  for (const btn of $('chart-range').querySelectorAll('button')) {
+    btn.onclick = () => { chartRange = Number(btn.dataset.range); renderChartRange(); };
+  }
+  renderChartRange();
+  $('chart-wrap').addEventListener('pointermove', chartHover);
+  $('chart-wrap').addEventListener('pointerleave', chartLeave);
+  window.addEventListener('resize', renderChart);
   $('open-file').onchange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const text = await file.text();
+    const buf = await file.arrayBuffer();
+    let text;
+    try {
+      text = (await readZipText(buf)) ?? new TextDecoder().decode(buf);
+    } catch (err) {
+      $('conn-error').textContent = err.message;
+      e.target.value = '';
+      return;
+    }
     analyzer = analyseText(text);
+    chartRange = 0;
+    renderChartRange();
     $('log').textContent = text;
     renderFindings();
     renderStatus();
@@ -1196,6 +1623,9 @@ function init() {
 
   setInterval(() => {
     renderStatus();
+    // Hold the picture still while the person is reading a tooltip.
+    if ($('chart-tip').classList.contains('hidden')) renderChart();
+    if (analyzer.trace) renderTraces();
     if (keepReading && analyzer.heartbeats === 0 && !analyzer.setupMode &&
         performance.now() - connectedAt > 10_000 && !$('conn-error').textContent)
       $('conn-error').textContent = T('no_heartbeat');
