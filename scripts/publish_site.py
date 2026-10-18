@@ -103,14 +103,26 @@ def main():
     for env, chip in TARGETS.items():
         pio('run', '-e', env, version=version)
         pio('run', '-e', env, '-t', 'buildfs', version=version)
+        pio('run', '-e', env, '-t', 'idedata', version=version)
         out = SITE / 'fw' / version / env
         out.mkdir(parents=True)
+        build = ROOT / '.pio/build' / env
+        idedata = json.loads((build / 'idedata.json').read_text(encoding='utf-8'))['extra']
+        # The full layout except NVS: boards can arrive with another layout
+        # entirely (devkits ship with ESP-AT, whose table puts the app at
+        # 0x100000), and an app written into our slot is then never booted.
+        # Bootloader, table and otadata come from PlatformIO's own flash list
+        # (offsets differ per chip); NVS at 0x9000 is never written, so a
+        # board that already ran this firmware keeps its settings. boot_app0
+        # lives in the framework package, which the next env may swap out, so
+        # copy it now.
+        images = [(Path(i['path']), int(i['offset'], 16)) for i in idedata['flash_images']]
+        images += [(build / 'firmware.bin', int(idedata.get('application_offset', hex(offsets['app0'])), 16)),
+                   (build / 'spiffs.bin', offsets['spiffs'])]
         parts = []
-        # App only + the portal UI. NVS (settings) and the bootloader are untouched.
-        for name, partition in (('firmware.bin', 'app0'), ('spiffs.bin', 'spiffs')):
-            src = ROOT / '.pio/build' / env / name
-            shutil.copy2(src, out / name)
-            parts.append({'path': f'fw/{version}/{env}/{name}', 'offset': offsets[partition],
+        for src, offset in images:
+            shutil.copy2(src, out / src.name)
+            parts.append({'path': f'fw/{version}/{env}/{src.name}', 'offset': offset,
                           'size': src.stat().st_size, 'sha256': sha256(src)})
         builds.append({'chip': chip, 'env': env, 'parts': parts})
 
