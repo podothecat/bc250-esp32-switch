@@ -1465,7 +1465,11 @@ async function flashFirmware() {
       write: (s) => { partial += s; },
       writeLine: (s) => { record('[flash] ' + partial + s); partial = ''; },
     };
-    const loader = new ESPLoader({ transport, baudrate: 460800, romBaudrate: 115200, terminal });
+    // Stay at the ROM's 115200 for the whole session. A faster rate needs the
+    // port closed and reopened, and on boards with a reset circuit that
+    // reopen glitches DTR/RTS, resets the chip and loses the stub mid-write
+    // ("Invalid head of packet"). ~80 s for the app is the price.
+    const loader = new ESPLoader({ transport, baudrate: 115200, romBaudrate: 115200, terminal });
     // The board should already be in install mode. default_reset still lets
     // boards with a working auto-reset circuit get there on their own. Bounded
     // so a board that never answers returns the page to logging.
