@@ -11,8 +11,8 @@
 
   When the site published by scripts/publish_site.py is reachable, the page also
   offers firmware updates: it compares the board's fw= with fw/manifest.json and,
-  only while the BC250 is off, flashes app + portal UI with esptool-js (settings
-  in NVS are kept).
+  only while the BC250 is off, flashes bootloader, partition table, otadata, app
+  and portal UI with esptool-js. NVS is never written, so settings are kept.
 
   The analyzer lives in its own script block (id "analyzer") so
   tests/power_log_host_test.py can run it under node against synthetic logs.

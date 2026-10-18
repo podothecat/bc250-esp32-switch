@@ -6,7 +6,7 @@ Builds every env in TARGETS with a release FW_VERSION, stages
   dist/site/index.html             tools/power-log.html, pointed at this site
   dist/site/vendor/                esptool-js (the in-browser flasher)
   dist/site/fw/manifest.json       version + per-chip parts with sha256
-  dist/site/fw/<version>/<env>/    firmware.bin, spiffs.bin
+  dist/site/fw/<version>/<env>/    bootloader, partitions, boot_app0, firmware, spiffs
   dist/site/_headers               CORS for copies of the page opened from disk
 then refuses to continue if any staged file contains a local path, the OS user
 name, git identity or the GitHub owner. --deploy uploads with
