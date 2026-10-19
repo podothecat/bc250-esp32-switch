@@ -105,7 +105,7 @@ def main():
         pio('run', '-e', env, '-t', 'buildfs', version=version)
         pio('run', '-e', env, '-t', 'idedata', version=version)
         out = SITE / 'fw' / version / env
-        out.mkdir(parents=True)
+        out.mkdir(parents=True, exist_ok=True)
         build = ROOT / '.pio/build' / env
         idedata = json.loads((build / 'idedata.json').read_text(encoding='utf-8'))['extra']
         # The full layout except NVS: boards can arrive with another layout

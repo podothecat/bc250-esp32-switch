@@ -12,3 +12,6 @@ dist/
 
 # wrangler local state
 .wrangler/
+
+# Python bytecode
+__pycache__/
