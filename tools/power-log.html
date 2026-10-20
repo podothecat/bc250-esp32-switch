@@ -6,7 +6,10 @@
 
   It reads the firmware's serial log through Web Serial (no driver or install
   beyond the OS's USB-serial driver), flags the known "PSU does not turn off"
-  failure modes live, and saves a timestamped log. Works opened from disk
+  controller-wake and portal-registration failure modes live, and saves a
+  timestamped log. Three views (power sense, controller wake, controller setup;
+  #power / #ctrl / #pair) show only the cards for that problem; the log always
+  records everything. Works opened from disk
   (file://) or hosted. The same page re-analyses a saved log via "Open log".
 
   When the site published by scripts/publish_site.py is reachable, the page also
@@ -21,7 +24,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BC250 Power Log</title>
+  <title>BC250 Diagnostics</title>
   <!-- Filled in by scripts/publish_site.py so copies opened from disk can update. -->
   <meta name="bc250-update-base" content="" />
   <style>
@@ -65,6 +68,32 @@
                    background:transparent; color:var(--muted); border:1px solid var(--line); }
     .lang button.on { color:var(--accent); border-color:var(--accent); }
     .hint { color:var(--muted); font-size:12px; line-height:1.6; margin-top:10px; }
+    .tabs { display:flex; gap:6px; margin:4px 0 10px; }
+    .tabs button { flex:1; padding:10px 12px; font-size:14px; background:transparent; color:var(--muted);
+                   border:1px solid var(--line); display:flex; align-items:center; justify-content:center; gap:8px; }
+    .tabs button.on { color:var(--accent); border-color:var(--accent); background:#1e1e1e; }
+    .badge { background:var(--warn); color:#000; border-radius:10px; padding:1px 7px; font-size:11px; }
+    body[data-view="power"] [data-only]:not([data-only="power"]),
+    body[data-view="ctrl"] [data-only]:not([data-only="ctrl"]),
+    body[data-view="pair"] [data-only]:not([data-only="pair"]) { display:none !important; }
+    ol.checklist { list-style:none; padding:0; margin:0; font-size:13px; line-height:1.6; }
+    ol.checklist li { display:flex; gap:10px; padding:6px 0; border-bottom:1px solid var(--line); color:var(--muted); }
+    ol.checklist li .mk { width:18px; flex:none; text-align:center; }
+    ol.checklist li .tx { flex:1; }
+    ol.checklist li .at { color:var(--muted); font-size:12px; }
+    ol.checklist li.done { color:var(--fg); } ol.checklist li.done .mk { color:var(--ok); }
+    ol.checklist li.now { color:var(--accent); font-weight:bold; }
+    ol.checklist li.skip { opacity:.55; }
+    #ctrl-events td:last-child { white-space:normal; overflow-wrap:anywhere; }
+    #ctrl-events td.warn { color:var(--warn); }
+    #ctrl-events td.ok { color:var(--ok); }
+    .card.attention { outline:2px solid var(--accent); }
+    .fw-notice { color:var(--accent); font-size:14px; font-weight:bold; line-height:1.6; margin-bottom:12px; }
+    details.card > summary { cursor:pointer; margin-bottom:0; }
+    details.card[open] > summary { margin-bottom:10px; }
+    ol.drv { margin-top:10px; }
+    ol.drv ul { margin:4px 0; padding-left:18px; }
+    ol.drv a { color:var(--accent2); overflow-wrap:anywhere; }
     .check { display:flex; align-items:center; gap:8px; margin-top:14px; font-size:13px; }
     .check input { accent-color:var(--accent); }
     .chart-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
@@ -138,14 +167,26 @@
     progress { width:100%; height:10px; margin-top:12px; accent-color:var(--accent); }
   </style>
 </head>
-<body>
+<body data-view="power">
   <div class="wrap">
     <div class="lang">
       <button id="lang-en">EN</button>
       <button id="lang-ko">한국어</button>
     </div>
     <h1>BC250 Switch</h1>
-    <div class="sub" data-i18n="subtitle">전원 로그 수집</div>
+    <div class="sub" data-i18n="subtitle">진단 로그 수집</div>
+
+    <!-- What is being debugged. Cards tagged data-only="power" / "ctrl" show only
+         in that view; untagged cards are shared. The log itself always records
+         everything, so either view's file serves both. -->
+    <div class="tabs" id="views" role="tablist">
+      <button role="tab" data-view="power"><span data-i18n="view_power">전원 감지</span><span class="badge hidden"></span></button>
+      <button role="tab" data-view="ctrl"><span data-i18n="view_ctrl">컨트롤러로 켜기</span><span class="badge hidden"></span></button>
+      <button role="tab" data-view="pair"><span data-i18n="view_pair">컨트롤러 등록</span><span class="badge hidden"></span></button>
+    </div>
+    <div class="sub" data-only="power" data-i18n="view_power_hint">PSU가 안 꺼지거나 늦게 꺼질 때: BC250 감지 전압과 전원이 꺼지는 과정을 봅니다.</div>
+    <div class="sub" data-only="ctrl" data-i18n="view_ctrl_hint">컨트롤러를 켜도 BC250이 안 켜지거나, 끈 뒤 저절로 다시 켜질 때: 컨트롤러 신호를 봅니다.</div>
+    <div class="sub" data-only="pair" data-i18n="view_pair_hint">설정 포털에서 컨트롤러가 목록에 안 나오거나 등록이 저장되지 않을 때: 등록이 어느 단계에서 멈췄는지 봅니다.</div>
 
     <div class="card hidden" id="unsupported">
       <div class="title err" data-i18n="unsupported_title">이 브라우저는 지원되지 않습니다</div>
@@ -160,23 +201,79 @@
       </div>
     </div>
 
+    <!-- USB driver help. The shipped WROOM32 boards use a Silicon Labs CP210x
+         bridge, which Windows does not install by itself. Collapsed by default;
+         an empty port picker opens it.
+         Link texts are product names; only the prose is translated. -->
+    <details class="card" id="driver">
+      <summary class="title" data-i18n="drv_title">처음 한 번: USB 드라이버 설치</summary>
+      <div class="hint" data-i18n="drv_intro">ESP32 보드의 USB 칩(CP2102, Silicon Labs)은 드라이버가 자동으로 설치되지 않습니다. 이 PC에 보드를 처음 연결한다면 아래 순서대로 먼저 설치하세요. 이미 설치했다면 건너뜁니다.</div>
+      <ol class="drv">
+        <li><span data-i18n="drv_step1">Silicon Labs 드라이버 페이지를 엽니다:</span>
+          <a href="https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers?tab=downloads" target="_blank" rel="noopener">CP210x USB to UART Bridge VCP Drivers</a></li>
+        <li><span data-i18n="drv_step2">Windows: [Downloads] 목록에서 "CP210x Universal Windows Driver"를 내려받아 압축을 풉니다. 풀린 폴더의 silabser.inf를 마우스 오른쪽 버튼으로 누르고 [설치]를 고릅니다. (Windows 11에서 메뉴에 없으면 [더 많은 옵션 표시] 안에 있습니다.)</span></li>
+        <li><span data-i18n="drv_step3">macOS: "CP210x VCP Mac OSX Driver"를 내려받아 설치하고, [시스템 설정 → 개인정보 보호 및 보안]에서 Silicon Labs 확장을 허용합니다.</span></li>
+        <li><span data-i18n="drv_step4">USB 케이블을 뽑았다 다시 꽂고, 이 페이지를 새로고침한 뒤 [연결]을 누릅니다.</span></li>
+        <li><span data-i18n="drv_step5">그래도 목록이 비어 있으면: 시작 버튼을 마우스 오른쪽 버튼으로 눌러 [장치 관리자]를 엽니다. [포트(COM &amp; LPT)] 아래에 "Silicon Labs CP210x USB to UART Bridge (COM3)"처럼 보이면 설치된 것입니다. [기타 장치]에 노란 느낌표가 붙은 "CP2102 USB to UART Bridge Controller"가 보이면 드라이버가 아직 설치되지 않은 것이니 2번을 다시 해 주세요. 아무 항목도 생기지 않으면 충전 전용 케이블일 수 있으니 다른 USB 케이블로 바꿔 보세요.</span></li>
+      </ol>
+    </details>
+
     <div class="card">
-      <div class="title" data-i18n="steps_title">사용 방법</div>
+      <div class="title" data-i18n="conn_title">보드 연결</div>
       <ol>
         <li data-i18n="step1">ESP32 보드를 USB 케이블로 이 PC에 연결합니다. (BC250 전원 연결은 그대로 둡니다.)</li>
         <li data-i18n="step2">[연결]을 누르고 목록에서 포트를 고른 뒤 [연결]을 누릅니다.</li>
-        <li data-i18n="step3">이 창을 열어 둔 채로 BC250을 켜고, 평소처럼 사용하다가 종료합니다. 문제가 생길 때까지 반복해도 됩니다.</li>
-        <li data-i18n="step4">종료 후 1분 이상 기다립니다.</li>
-        <li data-i18n="step5">[로그 저장]을 누르면 압축 파일(.zip)이 저장됩니다. 이 파일을 개발자에게 보내 주세요.</li>
+        <li data-i18n="step_fw">아래에 [펌웨어 업데이트]가 노란 테두리로 나타나면 사용 방법을 따라 하기 전에 먼저 설치합니다.</li>
       </ol>
       <div class="buttons" style="margin-top:16px">
         <button id="connect-btn" data-i18n="connect">연결</button>
         <button class="secondary" id="disconnect-btn" data-i18n="disconnect" disabled>연결 끊기</button>
-        <button id="save-btn" data-i18n="save" disabled>로그 저장</button>
       </div>
       <button class="link" id="connect-any" data-i18n="connect_any">목록에 보드가 없나요? 모든 포트 보기</button>
-      <div class="hint" id="save-msg"></div>
       <div class="hint err" id="conn-error"></div>
+    </div>
+
+    <!-- Between connecting and the steps: an outdated board is updated before
+         anything else, since older firmware lacks log lines the views use. -->
+    <div class="card hidden" id="fw-card">
+      <div class="title" data-i18n="fw_title">펌웨어 업데이트</div>
+      <div class="fw-notice hidden" id="fw-notice"></div>
+      <div class="stats">
+        <div class="stat"><div class="k" data-i18n="fw_current">현재 버전</div><div class="v idle" id="fw-current">-</div></div>
+        <div class="stat"><div class="k" data-i18n="fw_latest">최신 버전</div><div class="v idle" id="fw-latest">-</div></div>
+      </div>
+      <label class="check hidden" id="fw-override-row">
+        <input type="checkbox" id="fw-override" /> <span data-i18n="fw_override">BC250 전원이 꺼져 있는 것을 직접 확인했습니다</span>
+      </label>
+      <div class="buttons" style="margin-top:14px">
+        <button id="fw-btn" data-i18n="fw_btn" disabled>업데이트 설치</button>
+      </div>
+      <div class="hint" id="fw-msg"></div>
+      <div class="hint" id="fw-result"></div>
+    </div>
+
+    <div class="card">
+      <div class="title" data-i18n="steps_title">사용 방법</div>
+      <ol data-only="power">
+        <li data-i18n="step3">이 창을 열어 둔 채로 BC250을 켜고, 평소처럼 사용하다가 종료합니다. 문제가 생길 때까지 반복해도 됩니다.</li>
+        <li data-i18n="step4">종료 후 1분 이상 기다립니다.</li>
+        <li data-i18n="step5">[로그 저장]을 누르면 압축 파일(.zip)이 저장됩니다. 이 파일을 개발자에게 보내 주세요.</li>
+      </ol>
+      <ol data-only="ctrl">
+        <li data-i18n="cstep3">BC250을 끄고 컨트롤러도 끈 채로 1분 기다립니다. 아래 [깨우기]가 "대기 중"이 되면 준비된 것입니다.</li>
+        <li data-i18n="cstep4">컨트롤러 전원을 켜고(Xbox 버튼, PlayStation은 PS 버튼만) 곧바로 [컨트롤러를 켰어요]를 누릅니다. 15초 뒤 결과가 진단 결과에 나옵니다.</li>
+        <li data-i18n="cstep5">BC250이 켜졌다면 끄고, 컨트롤러도 끈 뒤 1번부터 몇 번 반복합니다. 저절로 다시 켜지는 문제라면 끈 뒤 2분 이상 그대로 둡니다.</li>
+        <li data-i18n="step5">[로그 저장]을 누르면 압축 파일(.zip)이 저장됩니다. 이 파일을 개발자에게 보내 주세요.</li>
+      </ol>
+      <ol data-only="pair">
+        <li data-i18n="pstep3">BC250이 꺼진 상태에서 포털 모드를 켭니다. 스위치나 ESP32의 BOOT 버튼을 스위치 LED가 빠르게 깜빡일 때까지 누른 뒤 놓습니다. 아래 [전원 상태]가 "설정 모드"가 됩니다.</li>
+        <li data-i18n="pstep4">휴대폰을 "BC250 Switch Setup" WiFi에 연결하고 http://192.168.4.1 에서 사용 설명서 순서대로 등록합니다. 그동안 이 창은 열어 둡니다. ESP32가 중간에 재부팅해도 기록은 이어집니다.</li>
+        <li data-i18n="pstep5">막히면 아래 [등록 진행]에서 어디까지 됐는지 확인하고, 그 화면에서 1분 정도 그대로 둔 뒤 [로그 저장]으로 파일을 보내 주세요.</li>
+      </ol>
+      <div class="buttons" style="margin-top:16px">
+        <button id="save-btn" data-i18n="save" disabled>로그 저장</button>
+      </div>
+      <div class="hint" id="save-msg"></div>
     </div>
 
     <div class="card">
@@ -184,12 +281,59 @@
       <div class="stats">
         <div class="stat"><div class="k" data-i18n="st_conn">USB 연결</div><div class="v idle" id="st-conn">-</div></div>
         <div class="stat"><div class="k" data-i18n="st_state">전원 상태</div><div class="v idle" id="st-state">-</div></div>
-        <div class="stat"><div class="k" data-i18n="st_sense">보드 감지 전압</div><div class="v idle" id="st-sense">-</div></div>
+        <div class="stat" data-only="power"><div class="k" data-i18n="st_sense">보드 감지 전압</div><div class="v idle" id="st-sense">-</div></div>
+        <div class="stat" data-only="ctrl"><div class="k" data-i18n="st_ble">컨트롤러 신호</div><div class="v idle" id="st-ble">-</div></div>
+        <div class="stat" data-only="ctrl"><div class="k" data-i18n="st_arm">깨우기</div><div class="v idle" id="st-arm">-</div></div>
         <div class="stat"><div class="k" data-i18n="st_time">기록 시간</div><div class="v idle" id="st-time">-</div></div>
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" data-only="ctrl">
+      <div class="title" data-i18n="ctrl_title">컨트롤러 신호</div>
+      <div class="stats">
+        <div class="stat"><div class="k" data-i18n="st_bound">등록된 컨트롤러</div><div class="v idle" id="st-bound">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_ps">PlayStation 깨우기</div><div class="v idle" id="st-ps">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_adv">주변 BLE 신호</div><div class="v idle" id="st-adv">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_classic">Classic 호출 수</div><div class="v idle" id="st-classic">-</div></div>
+      </div>
+      <div class="buttons" style="margin-top:14px">
+        <button id="mark-btn" data-i18n="mark_btn" disabled>컨트롤러를 켰어요</button>
+      </div>
+      <div class="hint" id="mark-msg"></div>
+      <div class="hint" data-i18n="ctrl_hint">깨우기는 BC250이 꺼져 있을 때만 동작합니다. 전원을 끈 직후에는 컨트롤러 신호가 30초 동안 조용해질 때까지 깨우기를 잠시 멈춥니다. 주변 BLE 신호는 근처 모든 기기의 신호 수로, BC250이 꺼져 있을 때만 측정됩니다.</div>
+      <div class="title" style="margin-top:18px" data-i18n="cev_title">컨트롤러 기록</div>
+      <div class="table-wrap">
+        <table class="traces">
+          <thead><tr><th data-i18n="cev_time">시각</th><th data-i18n="cev_what">내용</th></tr></thead>
+          <tbody id="ctrl-events"></tbody>
+        </table>
+      </div>
+      <div class="hint" id="ctrl-events-none" data-i18n="cev_none">아직 컨트롤러 기록이 없습니다.</div>
+      <div class="hint" data-i18n="cev_note">등록된 컨트롤러의 신호만 기록됩니다. 등록하지 않은 컨트롤러는 켜도 여기에 나오지 않습니다.</div>
+    </div>
+
+    <div class="card" data-only="pair">
+      <div class="title" data-i18n="pair_title">등록 진행</div>
+      <ol class="checklist" id="pair-steps"></ol>
+      <div class="stats" style="margin-top:14px">
+        <div class="stat"><div class="k" data-i18n="st_pmode">포털 단계</div><div class="v idle" id="st-pmode">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_phone">휴대폰 연결</div><div class="v idle" id="st-phone">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_host">BC250 주소</div><div class="v idle" id="st-host">-</div></div>
+        <div class="stat"><div class="k" data-i18n="st_adv">주변 BLE 신호</div><div class="v idle" id="st-padv">-</div></div>
+      </div>
+      <div class="title" style="margin-top:18px" data-i18n="pdev_title">포털 목록에 나온 컨트롤러</div>
+      <div class="table-wrap">
+        <table class="traces">
+          <thead><tr><th data-i18n="pdev_time">처음 보인 시각</th><th data-i18n="pdev_addr">주소</th>
+            <th data-i18n="pdev_kind">방식</th><th data-i18n="pdev_name">이름</th><th class="n" data-i18n="pdev_rssi">신호</th></tr></thead>
+          <tbody id="pair-devices"></tbody>
+        </table>
+      </div>
+      <div class="hint" id="pair-devices-none" data-i18n="pdev_none">아직 목록에 나온 컨트롤러가 없습니다.</div>
+      <div class="hint" data-i18n="pdev_note">목록 기록은 최신 펌웨어에서만 남습니다. 컨트롤러 화면이 열려 있는데도 여기 아무것도 나오지 않으면 위 [펌웨어 업데이트]로 먼저 업데이트해 주세요. 신호는 dBm이며 -80보다 낮으면(예: -90) 컨트롤러를 ESP32 가까이 가져가세요.</div>
+    </div>
+
+    <div class="card" data-only="power">
       <div class="chart-head">
         <div class="title" data-i18n="chart_title">보드 감지 전압 (TPMS1)</div>
         <div class="seg" id="chart-range" role="group">
@@ -216,22 +360,6 @@
         </table>
       </div>
       <div class="hint" id="traces-none" data-i18n="traces_none">아직 전원을 끈 기록이 없습니다. BC250을 켰다가 꺼 보세요.</div>
-    </div>
-
-    <div class="card hidden" id="fw-card">
-      <div class="title" data-i18n="fw_title">펌웨어 업데이트</div>
-      <div class="stats">
-        <div class="stat"><div class="k" data-i18n="fw_current">현재 버전</div><div class="v idle" id="fw-current">-</div></div>
-        <div class="stat"><div class="k" data-i18n="fw_latest">최신 버전</div><div class="v idle" id="fw-latest">-</div></div>
-      </div>
-      <label class="check hidden" id="fw-override-row">
-        <input type="checkbox" id="fw-override" /> <span data-i18n="fw_override">BC250 전원이 꺼져 있는 것을 직접 확인했습니다</span>
-      </label>
-      <div class="buttons" style="margin-top:14px">
-        <button id="fw-btn" data-i18n="fw_btn" disabled>업데이트 설치</button>
-      </div>
-      <div class="hint" id="fw-msg"></div>
-      <div class="hint" id="fw-result"></div>
     </div>
 
     <!-- Install walkthrough. Shown for every phase except idle; the person's
@@ -314,6 +442,49 @@ const NORMAL_RESETS = new Set(['POWERON', 'SW', 'EXT', 'DEEPSLEEP', 'USB']);
 //                   after power-off, and whether it fell below SENSE_LOW_MV
 //                   (info when it dropped promptly, warn otherwise).
 // It also keeps the heartbeat series and power events for the sense chart.
+//
+// Controller wake (WROOM32 Bluepad32 logs; only registered controllers are logged):
+//   CTRL_NONE_BOUND    no controller registered, so controller wake is off.
+//   CTRL_SCAN_FAILED   the Bluetooth scan did not start.
+//   CTRL_BT_NOT_READY  Bluetooth stack still not ready after three [BTDIAG] reports.
+//   CTRL_NO_ADV        scanning, yet no advertisement from any device for NO_ADV_S.
+//   CTRL_NEVER_QUIET   OFF, wake disarmed for NEVER_QUIET_S and the controller is
+//                      still being heard: it never goes quiet, so wake never re-arms.
+//   CTRL_PS_BOARD_ON   ESP32 booted with the board on, so the PlayStation (spoofed
+//                      Classic) wake is off until the ESP32 restarts with it off.
+//   CTRL_MARK_*        verdict MARK_S after the person pressed "controller on":
+//                      NOT_SEEN, NO_WAKE (seen while OFF, no power-on), OK and
+//                      SEEN_ON (info).
+const HB_BLE_RE = /^\[HB  \] state=(\w+) .*?ble=(\w+)\/(\w+)/;
+const MARK_RE = /^\[diag\] mark: controller on/;
+const MARK_S = 15;
+const NEVER_QUIET_S = 120;     // BLE_REARM_SILENCE_MS is 30 s; allow plenty more
+const NO_ADV_S = 30;
+const CTRL_EVENTS_MAX = 500;
+//
+// Controller registration in the setup portal. The flow (docs/사용설명서.md)
+// spans two portal boots: save the BC250 address, then "continue to controller
+// step" reboots into a spoofed session where controllers are listed and saved.
+//   PAIR_NO_CLIENT        portal up PAIR_NO_CLIENT_S, no phone on its WiFi.
+//   PAIR_CLIENT_DROPS     the phone left the portal WiFi three times in a boot.
+//   PAIR_HOST_NOT_SEEN    BC250 powered from the portal, no "BC250 Power Setup"
+//                         connection within PAIR_HOST_S.
+//   PAIR_STEP_NOT_SPOOFED "continue to controller step" rebooted without the
+//                         BC250 identity (reason given).
+//   PAIR_PICKER_NO_HOST   controller list opened without that step, where only
+//                         controllers in pairing mode can appear.
+//   PAIR_SCAN_FAILED      the picker's Bluetooth scan did not start.
+//   PAIR_NOTHING_FOUND    picker scanning PAIR_EMPTY_S with nothing listed.
+//   PAIR_HID_TIMEOUT / PAIR_NOT_GAMEPAD  a pad connected but was dropped.
+//   PAIR_LE_FAIL          a BLE connection attempt completed with an error.
+//   PAIR_NOT_SAVED        portal left with controllers listed but none saved.
+//   PAIR_BOUND_ZERO       the save cleared every controller.
+//   PAIR_SAVED            (info) controllers saved.
+const PAIR_STEPS = ['setup', 'client', 'candidate', 'host', 'step', 'spoofed', 'picker', 'found', 'bound', 'done'];
+const PAIR_NO_CLIENT_S = 90;
+const PAIR_HOST_S = 180;
+const PAIR_EMPTY_S = 60;
+const PAIR_DEVICE_RE = /^\[PORTAL\] device (\S+) (ble|classic) rssi=(-?\d+) name=(.*)$/;
 const TRACE_S = 30;            // how long a power-off is followed
 const TRACE_BEFORE_S = 30;     // window averaged as "while on"
 const SERIES_MAX = 100_000;    // ~28 h of 1 Hz heartbeats
@@ -335,6 +506,22 @@ class Analyzer {
     this.portalPsuOn = false;
     this.setupMode = false;
     this.ranges = {};        // state -> [min, max] mV
+    this.ctrl = {
+      events: [],            // {t, kind, params} for the controller timeline
+      state: null, present: null, armed: null,
+      disarmedAt: null, lastPresentT: null, quietReported: false,
+      bound: null, boundAddr: null, bthost: null, classicReq: null,
+      notReady: 0, advLast: null, advLastT: 0, advRate: null, advFlatSince: null, noAdvReported: false,
+      mark: null,            // pending "controller turned on" mark
+    };
+    this.pair = {
+      inSetup: false, prevSetup: false,
+      steps: {},             // PAIR_STEPS name -> t, for the latest attempt
+      devices: [],           // {addr, transport, name, rssi, t} listed in the picker
+      hostSavedAtStart: null, spoofed: null, reason: null, hostAddr: null, candidate: null,
+      stepRequested: false, bound: null, leConn: null, leStatus: null,
+      session: {},           // per portal boot, see newSession()
+    };
   }
 
   emit(code, t, params = {}, severity = 'warn') {
@@ -344,6 +531,145 @@ class Analyzer {
   }
 
   feed(t, line) {
+    return this.tick(t).concat(this.ctrlLine(t, line), this.pairLine(t, line), this.powerLine(t, line));
+  }
+
+  // Time-based verdicts. Called for every line and, live, once a second: the
+  // portal prints nothing while it waits for a phone.
+  tick(t) {
+    let out = [];
+    const c = this.ctrl, p = this.pair, s = p.session;
+    if (c.mark && t - c.mark.t >= MARK_S) out = out.concat(this.closeMark());
+    if (!p.inSetup) return out;
+    if (!s.noClient && !s.clientAt && t - s.at >= PAIR_NO_CLIENT_S) {
+      s.noClient = true;
+      out = out.concat(this.emit('PAIR_NO_CLIENT', t, { dur: Math.round(t - s.at) }));
+    }
+    if (s.hostPowerAt !== null && !s.hostNotSeen && t - s.hostPowerAt >= PAIR_HOST_S &&
+        !(p.steps.candidate >= s.hostPowerAt)) {
+      s.hostNotSeen = true;
+      out = out.concat(this.emit('PAIR_HOST_NOT_SEEN', t, { dur: Math.round(t - s.hostPowerAt) }));
+    }
+    if (s.scanning && s.scanAt !== null && !s.found && !s.nothingFound && t - s.scanAt >= PAIR_EMPTY_S) {
+      s.nothingFound = true;
+      out = out.concat(this.emit('PAIR_NOTHING_FOUND', t, { dur: Math.round(t - s.scanAt), spoofed: p.spoofed }));
+    }
+    return out;
+  }
+
+  newSession(t) {
+    this.pair.session = { at: t, clientAt: null, clients: 0, drops: 0, scanAt: null, scanning: false,
+                          found: 0, hostPowerAt: null, once: new Set(),
+                          noClient: false, hostNotSeen: false, nothingFound: false };
+  }
+
+  // Emits a code at most once per portal boot.
+  pairOnce(code, t, params = {}, severity = 'warn') {
+    const once = this.pair.session.once;
+    if (!once || once.has(code)) return [];
+    once.add(code);
+    return this.emit(code, t, params, severity);
+  }
+
+  pairDevice(t, addr, transport, name, rssi) {
+    const p = this.pair;
+    let d = p.devices.find((x) => x.addr === addr);
+    if (!d) p.devices.push(d = { addr, transport, name: '', rssi: null, t });
+    if (name) d.name = name;
+    if (rssi !== null) d.rssi = rssi;
+    p.steps.found = p.steps.found ?? t;
+    p.session.found++;
+  }
+
+  pairLine(t, line) {
+    const p = this.pair;
+    let m;
+    if (RESET_RE.test(line)) {
+      p.prevSetup = p.inSetup;
+      p.inSetup = false;
+      return [];
+    }
+    if (line.includes('SETUP MODE ===') || (line.startsWith('[PORTAL]') && !p.inSetup)) {
+      // A portal boot right after another one continues the same attempt (the
+      // controller step reboots); one after a normal boot starts a new attempt.
+      if (!p.prevSetup && !p.inSetup) {
+        p.steps = {}; p.devices = []; p.hostSavedAtStart = null; p.bound = null;
+        p.candidate = null; p.stepRequested = false;
+      }
+      p.inSetup = true; p.prevSetup = true;
+      p.spoofed = null; p.leConn = null;
+      this.newSession(t);
+      p.steps.setup = p.steps.setup ?? t;
+      if (line.includes('SETUP MODE ===')) return [];
+    }
+    if (!p.inSetup) return [];
+    const s = p.session;
+
+    if ((m = /^\[PORTAL\] host identity: (spoofing BC250|BC250 Power Setup) \((.*)\), board (\S+)/.exec(line))) {
+      p.spoofed = m[1] === 'spoofing BC250';
+      p.reason = m[2];
+      const saved = p.spoofed || m[2] === 'setup requested' || m[2] === 'board is on';
+      if (p.hostSavedAtStart === null) p.hostSavedAtStart = saved;
+      if (p.spoofed) p.steps.spoofed = t;
+      if (p.stepRequested) {
+        p.stepRequested = false;
+        if (!p.spoofed) return this.pairOnce('PAIR_STEP_NOT_SPOOFED', t, { reason: m[2] });
+      }
+    } else if ((m = /^\[PORTAL\] AP client (connected|disconnected); clients=(\d+)/.exec(line))) {
+      s.clients = +m[2];
+      if (m[1] === 'connected') {
+        p.steps.client = p.steps.client ?? t;
+        s.clientAt = s.clientAt ?? t;
+      } else if (++s.drops >= 3) {
+        return this.pairOnce('PAIR_CLIENT_DROPS', t, { n: s.drops });
+      }
+    } else if ((m = /^\[PORTAL\] BC250 candidate seen: (\S+)/.exec(line))) {
+      p.candidate = m[1];
+      p.steps.candidate = t;
+    } else if ((m = /^\[PORTAL\] BC250 host (\S+)/.exec(line))) {
+      if (m[1] === 'cleared') { p.hostAddr = null; delete p.steps.host; }
+      else { p.hostAddr = m[1]; p.steps.host = t; }
+    } else if ((m = PORTAL_POWER_RE.exec(line))) {
+      s.hostPowerAt = m[1] === 'ON' && !p.spoofed ? t : null;
+    } else if (line.startsWith('[PORTAL] controller step requested')) {
+      p.steps.step = t;
+      p.stepRequested = true;
+    } else if (line.startsWith('[PORTAL] BLE scan started')) {
+      p.steps.picker = p.steps.picker ?? t;
+      if (!s.scanning) s.scanAt = t;   // a pause (phone left) restarts the wait
+      s.scanning = true;
+      if (p.spoofed === false) return this.pairOnce('PAIR_PICKER_NO_HOST', t);
+    } else if (line.startsWith('[PORTAL] BLE scan failed')) {
+      return this.pairOnce('PAIR_SCAN_FAILED', t);
+    } else if (line.startsWith('[PORTAL] Bluetooth paused')) {
+      s.scanning = false;
+    } else if ((m = PAIR_DEVICE_RE.exec(line))) {
+      const rssi = +m[3];
+      this.pairDevice(t, m[1], m[2], m[4] === '-' ? '' : m[4], rssi === -127 ? null : rssi);
+    } else if ((m = /^\[HID\] connected (\S+) \((.*)\), disconnecting/.exec(line))) {
+      this.pairDevice(t, m[1], 'hid', m[2], null);
+    } else if ((m = /^\[HID\] connected (\S+) \((.*)\) is not a gamepad/.exec(line))) {
+      return this.pairOnce('PAIR_NOT_GAMEPAD', t, { addr: m[1], model: m[2] });
+    } else if (/^\[HID\] slot=\d+ first input report timed out/.test(line)) {
+      return this.pairOnce('PAIR_HID_TIMEOUT', t);
+    } else if ((m = /^\[BTDIAG\] .*?le_conn=(\d+) status=0x([0-9a-f]+)/.exec(line))) {
+      const conn = +m[1], before = p.leConn;
+      p.leConn = conn; p.leStatus = m[2];
+      if (before !== null && conn > before && m[2] !== '00')
+        return this.pairOnce('PAIR_LE_FAIL', t, { status: '0x' + m[2] });
+    } else if ((m = /^\[PORTAL\] bound (\d+) controller/.exec(line))) {
+      p.bound = +m[1];
+      if (p.bound === 0) return this.emit('PAIR_BOUND_ZERO', t);
+      p.steps.bound = t;
+      return this.emit('PAIR_SAVED', t, { n: p.bound }, 'info');
+    } else if (line.startsWith('[PORTAL] setup complete') || line.startsWith('[PORTAL] button held, leaving setup')) {
+      if (line.startsWith('[PORTAL] setup complete')) p.steps.done = t;
+      if (p.devices.length && !p.steps.bound) return this.pairOnce('PAIR_NOT_SAVED', t, { n: p.devices.length });
+    }
+    return [];
+  }
+
+  powerLine(t, line) {
     let m;
     if ((m = HB_RE.exec(line))) return this.heartbeat(t, m[1], +m[3], m[4] === 'high');
     if ((m = ACT_POWER_RE.exec(line))) return this.power(t, m[1], m[2] === 'on');
@@ -452,8 +778,115 @@ class Analyzer {
     }, verdict === 'drop' ? 'info' : 'warn');
   }
 
-  // End of input (saved file): report a power-off that was still being followed.
-  finish() { return this.closeTrace(); }
+  // End of input (saved file): report a power-off that was still being followed,
+  // and judge a controller mark whose window was cut short.
+  finish() { return this.closeTrace().concat(this.ctrl.mark ? this.closeMark() : []); }
+
+  ctrlEvent(t, kind, params = {}) {
+    const ev = this.ctrl.events;
+    ev.push({ t, kind, params });
+    if (ev.length > CTRL_EVENTS_MAX) ev.splice(0, ev.length - CTRL_EVENTS_MAX);
+  }
+
+  // Marks every sighting of a registered controller for a pending mark.
+  ctrlSeen() { if (this.ctrl.mark) this.ctrl.mark.seen = true; }
+
+  ctrlLine(t, line) {
+    const c = this.ctrl;
+    let out = [], m;
+    if (c.mark && t - c.mark.t >= MARK_S) out = out.concat(this.closeMark());
+
+    if ((m = HB_BLE_RE.exec(line))) {
+      const present = m[2] === 'present', armed = m[3] === 'armed';
+      if (!armed && c.armed !== false) { c.disarmedAt = t; c.quietReported = false; }
+      if (armed) c.disarmedAt = null;
+      c.state = m[1]; c.present = present; c.armed = armed;
+      if (present) { c.lastPresentT = t; this.ctrlSeen(); }
+      if (c.state === 'OFF' && !armed && c.disarmedAt !== null && !c.quietReported &&
+          t - c.disarmedAt >= NEVER_QUIET_S && c.lastPresentT !== null && t - c.lastPresentT <= 35) {
+        c.quietReported = true;
+        out = out.concat(this.emit('CTRL_NEVER_QUIET', t, { dur: Math.round(t - c.disarmedAt) }));
+      }
+    } else if ((m = /^\[BLE \] registered controller advertising: (\S+)/.exec(line))) {
+      this.ctrlEvent(t, 'adv', { addr: m[1] }); this.ctrlSeen();
+    } else if ((m = /^\[BT\] registered Classic controller seen: (\S+)/.exec(line))) {
+      this.ctrlEvent(t, 'classic', { addr: m[1] }); this.ctrlSeen();
+    } else if ((m = /^\[HID\] connected (\S+) \((.*)\), disconnecting/.exec(line))) {
+      this.ctrlEvent(t, 'hid', { addr: m[1], model: m[2] }); this.ctrlSeen();
+    } else if ((m = /^\[BLE \] controller (seen|lost)$/.exec(line))) {
+      this.ctrlEvent(t, m[1] === 'seen' ? 'present' : 'lost');
+    } else if (line.startsWith('[BLE ] wake disarmed')) {
+      c.armed = false; c.disarmedAt = t; c.quietReported = false;
+      this.ctrlEvent(t, 'disarmed');
+    } else if (line.startsWith('[BLE ] controller quiet -> wake re-armed')) {
+      c.armed = true; c.disarmedAt = null;
+      this.ctrlEvent(t, 'armed');
+    } else if (line.startsWith('[BT] no controller bound')) {
+      c.bound = 0;
+      this.ctrlEvent(t, 'none');
+      out = out.concat(this.emit('CTRL_NONE_BOUND', t));
+    } else if ((m = /^\[BT\] scan requested for (\d+) controller\(s\): (.*)$/.exec(line))) {
+      c.bound = +m[1];
+      const failed = m[2].startsWith('failed');
+      this.ctrlEvent(t, 'scan', { n: c.bound, failed });
+      if (failed) out = out.concat(this.emit('CTRL_SCAN_FAILED', t, { n: c.bound }));
+    } else if ((m = /^\[INIT\] state=\S+ board=\S+ bound=(\S+)/.exec(line))) {
+      c.boundAddr = m[1] === '(none)' ? null : m[1];
+    } else if ((m = /^\[BTHOST\] addr=(\S+) spoofed=(\d) reason=(.*?) connectable=/.exec(line))) {
+      c.bthost = { addr: m[1], spoofed: m[2] === '1', reason: m[3] };
+      this.ctrlEvent(t, 'bthost', { ...c.bthost });
+      if (m[3] === 'board is on') out = out.concat(this.emit('CTRL_PS_BOARD_ON', t));
+    } else if ((m = /^\[BTDIAG\] ready=(\d) .*?adv=(\d+)/.exec(line))) {
+      out = out.concat(this.btDiag(t, m[1] === '1', +m[2]));
+    } else if ((m = /^\[BTCLASSIC\] requests=(\d+)/.exec(line))) {
+      c.classicReq = +m[1];
+    } else if ((m = ACT_POWER_RE.exec(line)) && m[2] === 'on' && m[1] === 'controller present (BLE)') {
+      this.ctrlEvent(t, 'wake');
+      if (c.mark) { c.mark.seen = true; if (c.mark.woke === null) c.mark.woke = t; }
+    } else if (MARK_RE.test(line)) {
+      if (c.mark) out = out.concat(this.closeMark());
+      c.mark = { t, state: c.state, armed: c.armed, seen: false, woke: null };
+      this.ctrlEvent(t, 'mark');
+    }
+    return out;
+  }
+
+  // [BTDIAG] arrives every 5 s while the scan runs (WROOM32, BC250 off). Its adv
+  // counter counts every advertisement heard from any device, so a counter that
+  // stands still means the radio hears nothing at all.
+  btDiag(t, ready, adv) {
+    const c = this.ctrl;
+    let out = [];
+    c.notReady = ready ? 0 : c.notReady + 1;
+    if (c.notReady === 3) out = out.concat(this.emit('CTRL_BT_NOT_READY', t));
+    if (c.advLast !== null && t - c.advLastT <= 12 && adv >= c.advLast) {
+      c.advRate = (adv - c.advLast) / Math.max(1, t - c.advLastT);
+      if (adv === c.advLast) {
+        if (c.advFlatSince === null) c.advFlatSince = c.advLastT;
+        if (!c.noAdvReported && t - c.advFlatSince >= NO_ADV_S) {
+          c.noAdvReported = true;
+          out = out.concat(this.emit('CTRL_NO_ADV', t, { dur: Math.round(t - c.advFlatSince) }));
+        }
+      } else {
+        c.advFlatSince = null; c.noAdvReported = false;
+      }
+    } else {
+      c.advFlatSince = null;   // first report, a gap, or the ESP32 restarted
+    }
+    c.advLast = adv; c.advLastT = t;
+    return out;
+  }
+
+  // Judges a "controller turned on" mark MARK_S after it was made.
+  closeMark() {
+    const mk = this.ctrl.mark;
+    this.ctrl.mark = null;
+    const on = !!mk.state && mk.state !== 'OFF';
+    if (!mk.seen) return this.emit('CTRL_MARK_NOT_SEEN', mk.t, { on });
+    if (mk.woke !== null) return this.emit('CTRL_MARK_OK', mk.t, { after: Math.round(mk.woke - mk.t) }, 'info');
+    if (on) return this.emit('CTRL_MARK_SEEN_ON', mk.t, {}, 'info');
+    return this.emit('CTRL_MARK_NO_WAKE', mk.t, { armed: mk.armed });
+  }
 
   power(t, reason, on) {
     this.events.push({ t, kind: on ? 'on' : 'off' });
@@ -518,7 +951,58 @@ if (typeof module !== 'undefined') module.exports = { Analyzer, analyseText, SEN
 <script>
 const I18N = {
   ko: {
-    subtitle: '전원 로그 수집',
+    subtitle: '진단 로그 수집',
+    view_power: '전원 감지', view_ctrl: '컨트롤러로 켜기', view_pair: '컨트롤러 등록',
+    view_pair_hint: '설정 포털에서 컨트롤러가 목록에 안 나오거나 등록이 저장되지 않을 때: 등록이 어느 단계에서 멈췄는지 봅니다.',
+    pstep3: 'BC250이 꺼진 상태에서 포털 모드를 켭니다. 스위치나 ESP32의 BOOT 버튼을 스위치 LED가 빠르게 깜빡일 때까지 누른 뒤 놓습니다. 아래 [전원 상태]가 "설정 모드"가 됩니다.',
+    pstep4: '휴대폰을 "BC250 Switch Setup" WiFi에 연결하고 http://192.168.4.1 에서 사용 설명서 순서대로 등록합니다. 그동안 이 창은 열어 둡니다. ESP32가 중간에 재부팅해도 기록은 이어집니다.',
+    pstep5: '막히면 아래 [등록 진행]에서 어디까지 됐는지 확인하고, 그 화면에서 1분 정도 그대로 둔 뒤 [로그 저장]으로 파일을 보내 주세요.',
+    pair_title: '등록 진행',
+    pair_steps: {
+      setup: '포털 모드 시작', client: '휴대폰이 "BC250 Switch Setup" WiFi에 연결',
+      candidate: 'BC250 Steam에서 "BC250 Power Setup" 선택 (주소 감지)', host: '[이 BC250 저장]으로 BC250 주소 저장',
+      step: '[컨트롤러 단계로 계속]', spoofed: 'ESP32가 BC250 주소로 재부팅 (컨트롤러 등록 세션)',
+      picker: '휴대폰에 컨트롤러 목록 화면 열림', found: '목록에 컨트롤러 나타남',
+      bound: '[저장 후 계속]으로 컨트롤러 저장', done: '[저장 후 재부팅]으로 포털 종료',
+    },
+    pair_skipped: '이미 저장됨',
+    st_pmode: '포털 단계', st_phone: '휴대폰 연결', st_host: 'BC250 주소',
+    pmode_setup: '설정 모드', pmode_host: 'BC250 주소 등록', pmode_spoofed: '컨트롤러 등록 세션', pmode_left: '포털 종료됨',
+    phone_n: (n) => n ? `${n}대` : '없음', host_saved: '저장됨', host_candidate: (a) => `감지됨 ${a}`,
+    pdev_title: '포털 목록에 나온 컨트롤러', pdev_time: '처음 보인 시각', pdev_addr: '주소', pdev_kind: '방식',
+    pdev_name: '이름', pdev_rssi: '신호', pdev_none: '아직 목록에 나온 컨트롤러가 없습니다.',
+    pdev_kinds: { ble: 'BLE', classic: 'PS 버튼 (Classic)', hid: '페어링 연결' },
+    pdev_note: '목록 기록은 최신 펌웨어에서만 남습니다. 컨트롤러 화면이 열려 있는데도 여기 아무것도 나오지 않으면 위 [펌웨어 업데이트]로 먼저 업데이트해 주세요. 신호는 dBm이며 -80보다 낮으면(예: -90) 컨트롤러를 ESP32 가까이 가져가세요.',
+    view_power_hint: 'PSU가 안 꺼지거나 늦게 꺼질 때: BC250 감지 전압과 전원이 꺼지는 과정을 봅니다.',
+    view_ctrl_hint: '컨트롤러를 켜도 BC250이 안 켜지거나, 끈 뒤 저절로 다시 켜질 때: 컨트롤러 신호를 봅니다.',
+    cstep3: 'BC250을 끄고 컨트롤러도 끈 채로 1분 기다립니다. 아래 [깨우기]가 "대기 중"이 되면 준비된 것입니다.',
+    cstep4: '컨트롤러 전원을 켜고(Xbox 버튼, PlayStation은 PS 버튼만) 곧바로 [컨트롤러를 켰어요]를 누릅니다. 15초 뒤 결과가 진단 결과에 나옵니다.',
+    cstep5: 'BC250이 켜졌다면 끄고, 컨트롤러도 끈 뒤 1번부터 몇 번 반복합니다. 저절로 다시 켜지는 문제라면 끈 뒤 2분 이상 그대로 둡니다.',
+    st_ble: '컨트롤러 신호', st_arm: '깨우기',
+    ble_present: '잡힘', ble_absent: '없음', arm_armed: '대기 중', arm_disarmed: '잠시 멈춤',
+    ctrl_title: '컨트롤러 신호', st_bound: '등록된 컨트롤러', st_ps: 'PlayStation 깨우기',
+    st_adv: '주변 BLE 신호', st_classic: 'Classic 호출 수',
+    bound_none: '없음', bound_n: (n) => `${n}개`, ps_on: '켜짐', ps_off: '꺼짐', adv_rate: (r) => `${r}/초`,
+    ps_reasons: { 'no saved host': 'BC250 주소 미등록', 'no valid saved host': 'BC250 주소 미등록',
+                  'board is on': 'BC250이 켜진 채 시작', 'setup requested': '설정 모드',
+                  'PS learning with saved host': '컨트롤러 등록 중', 'board off with saved host': '정상' },
+    mark_btn: '컨트롤러를 켰어요',
+    mark_pending: (s) => `판정 중입니다… ${s}초 남음`,
+    ctrl_hint: '깨우기는 BC250이 꺼져 있을 때만 동작합니다. 전원을 끈 직후에는 컨트롤러 신호가 30초 동안 조용해질 때까지 깨우기를 잠시 멈춥니다. 주변 BLE 신호는 근처 모든 기기의 신호 수로, BC250이 꺼져 있을 때만 측정됩니다.',
+    cev_title: '컨트롤러 기록', cev_time: '시각', cev_what: '내용',
+    cev_none: '아직 컨트롤러 기록이 없습니다.',
+    cev_note: '등록된 컨트롤러의 신호만 기록됩니다. 등록하지 않은 컨트롤러는 켜도 여기에 나오지 않습니다.',
+    cev: {
+      adv: (p) => `등록된 컨트롤러 신호 (BLE) ${p.addr}`,
+      classic: (p) => `등록된 컨트롤러 호출 (PlayStation/Classic) ${p.addr}`,
+      hid: (p) => `컨트롤러 연결 ${p.model} ${p.addr}`,
+      present: () => '컨트롤러 신호 잡힘', lost: () => '컨트롤러 신호 끊김',
+      disarmed: () => '전원 꺼짐: 깨우기 잠시 멈춤', armed: () => '컨트롤러가 조용해짐: 깨우기 대기',
+      wake: () => '컨트롤러 신호로 BC250 켬', mark: () => '[컨트롤러를 켰어요] 누름',
+      none: () => '등록된 컨트롤러 없음',
+      scan: (p) => p.failed ? `컨트롤러 ${p.n}개 찾기 시작 실패 (다시 시도)` : `컨트롤러 ${p.n}개 찾기 시작`,
+      bthost: (p) => `PlayStation 깨우기 ${p.spoofed ? '켜짐' : '꺼짐'} (${psReason(p.reason)})`,
+    },
     unsupported_title: '이 브라우저는 지원되지 않습니다',
     unsupported_body: 'PC의 Chrome 또는 Edge로 이 파일을 열어 주세요. (Firefox, Safari, 휴대폰은 USB 시리얼을 지원하지 않습니다.)',
     recover_title: '저장하지 않은 이전 기록이 있습니다',
@@ -528,6 +1012,11 @@ const I18N = {
     step2: '[연결]을 누르고 목록에서 포트를 고른 뒤 [연결]을 누릅니다.',
     step3: '이 창을 열어 둔 채로 BC250을 켜고, 평소처럼 사용하다가 종료합니다. 문제가 생길 때까지 반복해도 됩니다.',
     step4: '종료 후 1분 이상 기다립니다.',
+    conn_title: '보드 연결',
+    step_fw: '아래에 [펌웨어 업데이트]가 노란 테두리로 나타나면 사용 방법을 따라 하기 전에 먼저 설치합니다.',
+    fw_legacy: '이전 버전',
+    fw_notice: '이 보드의 펌웨어가 최신이 아닙니다. 이전 펌웨어는 진단에 필요한 기록 일부를 남기지 않으니, 아래 사용 방법을 따라 하기 전에 먼저 [업데이트 설치]를 눌러 주세요. 설정(WiFi, 컨트롤러)은 그대로 유지됩니다.',
+    fw_notice_setup: '설정 모드에서는 펌웨어 버전을 바로 확인할 수 없습니다. 포털을 끝낸 뒤 다시 연결하면 확인되며, 최신이 아니면 먼저 업데이트하세요.',
     step5: '[로그 저장]을 누르면 압축 파일(.zip)이 저장됩니다. 이 파일을 개발자에게 보내 주세요.',
     saved: (name, kb) => `저장했습니다: ${name} (${kb} KB). 이 파일을 개발자에게 보내 주세요.`,
     chart_title: '보드 감지 전압 (TPMS1)', range_2m: '2분', range_10m: '10분', range_all: '전체',
@@ -548,7 +1037,14 @@ const I18N = {
     state_ON: '켜짐', state_OFF: '꺼짐', state_BOOTING: '부팅 중', state_setup: '설정 모드',
     no_heartbeat: '연결은 되었지만 보드에서 신호가 오지 않습니다. 보드에 펌웨어가 올라가 있는지 확인해 주세요.',
     err_open: '포트를 열 수 없습니다. 다른 프로그램(시리얼 모니터 등)이 사용 중인지 확인해 주세요.',
-    err_none: '포트를 선택하지 않았습니다. 목록이 비어 있으면 USB 케이블(충전 전용 케이블은 안 됨)과 드라이버를 확인해 주세요.',
+    err_none: '포트를 선택하지 않았습니다. 목록이 비어 있으면 위쪽 안내대로 USB 드라이버를 설치하고, USB 케이블(충전 전용 케이블은 안 됨)을 확인해 주세요.',
+    drv_title: '처음 한 번: USB 드라이버 설치',
+    drv_intro: 'ESP32 보드의 USB 칩(CP2102, Silicon Labs)은 드라이버가 자동으로 설치되지 않습니다. 이 PC에 보드를 처음 연결한다면 아래 순서대로 먼저 설치하세요. 이미 설치했다면 건너뜁니다.',
+    drv_step1: 'Silicon Labs 드라이버 페이지를 엽니다:',
+    drv_step2: 'Windows: [Downloads] 목록에서 "CP210x Universal Windows Driver"를 내려받아 압축을 풉니다. 풀린 폴더의 silabser.inf를 마우스 오른쪽 버튼으로 누르고 [설치]를 고릅니다. (Windows 11에서 메뉴에 없으면 [더 많은 옵션 표시] 안에 있습니다.)',
+    drv_step3: 'macOS: "CP210x VCP Mac OSX Driver"를 내려받아 설치하고, [시스템 설정 → 개인정보 보호 및 보안]에서 Silicon Labs 확장을 허용합니다.',
+    drv_step4: 'USB 케이블을 뽑았다 다시 꽂고, 이 페이지를 새로고침한 뒤 [연결]을 누릅니다.',
+    drv_step5: '그래도 목록이 비어 있으면: 시작 버튼을 마우스 오른쪽 버튼으로 눌러 [장치 관리자]를 엽니다. [포트(COM & LPT)] 아래에 "Silicon Labs CP210x USB to UART Bridge (COM3)"처럼 보이면 설치된 것입니다. [기타 장치]에 노란 느낌표가 붙은 "CP2102 USB to UART Bridge Controller"가 보이면 드라이버가 아직 설치되지 않은 것이니 2번을 다시 해 주세요. 아무 항목도 생기지 않으면 충전 전용 케이블일 수 있으니 다른 USB 케이블로 바꿔 보세요.',
     confirm_clear: '현재 기록을 지우고 새로 시작할까요? 저장하지 않은 내용은 사라집니다.',
     leave_warning: '저장하지 않은 기록이 있습니다.',
     fw_title: '펌웨어 업데이트', fw_current: '현재 버전', fw_latest: '최신 버전',
@@ -601,6 +1097,33 @@ const I18N = {
       RESET: p => p.state ? `보드가 ${p.state === 'ON' ? '켜진' : '부팅 중인'} 상태에서 ESP32가 재시작했습니다 (${p.reason}). 이때 PSU가 강제로 꺼집니다.`
                           : `ESP32가 비정상적으로 재시작했습니다 (${p.reason}).`,
       SETUP_MODE: () => '보드가 설정 모드로 시작했습니다.',
+      CTRL_NONE_BOUND: () => '등록된 컨트롤러가 없어 컨트롤러로 켜기가 꺼져 있습니다. 설정 모드(설정 화면)에서 컨트롤러를 등록해 주세요.',
+      CTRL_SCAN_FAILED: (p) => `컨트롤러 ${p.n}개를 찾는 블루투스 검색을 시작하지 못했습니다. 계속 반복되면 ESP32를 다시 시작해 보세요.`,
+      CTRL_BT_NOT_READY: () => 'ESP32의 블루투스가 준비되지 않은 상태로 계속 남아 있습니다. ESP32를 다시 시작해 보세요.',
+      CTRL_NO_ADV: (p) => `블루투스 검색 중인데 ${p.dur}초 동안 주변의 어떤 기기 신호도 받지 못했습니다. 근처에 블루투스 기기가 있다면 ESP32의 블루투스 수신에 문제가 있는 것입니다.`,
+      CTRL_NEVER_QUIET: (p) => `꺼진 뒤 ${p.dur}초가 지나도록 컨트롤러가 계속 신호를 보내 깨우기가 다시 대기 상태가 되지 않았습니다. 컨트롤러가 30초 동안 조용해야 다음에 컨트롤러로 켤 수 있습니다. 컨트롤러 전원을 직접 꺼 주세요.`,
+      CTRL_PS_BOARD_ON: () => 'ESP32가 BC250이 켜진 상태에서 시작해 PlayStation 컨트롤러로 켜기가 꺼져 있습니다. BC250이 꺼진 상태에서 ESP32를 다시 시작(RST 버튼)하면 켜집니다. Xbox 등 BLE 컨트롤러는 영향이 없습니다.',
+      CTRL_MARK_NOT_SEEN: (p) => p.on
+        ? '[컨트롤러를 켰어요]를 눌렀지만 BC250이 켜져 있어 컨트롤러 신호를 찾지 않았습니다. BC250을 끈 뒤 다시 해 보세요.'
+        : '[컨트롤러를 켰어요]를 누른 뒤 15초 동안 등록된 컨트롤러 신호가 잡히지 않았습니다. 컨트롤러가 등록되어 있는지, 다른 기기(PC, 휴대폰)에 연결되지 않았는지 확인해 주세요.',
+      CTRL_MARK_NO_WAKE: (p) => p.armed === false
+        ? '컨트롤러 신호는 잡혔지만, 전원을 끈 지 얼마 안 돼 깨우기가 잠시 멈춘 상태라 켜지 않았습니다. [깨우기]가 "대기 중"이 된 뒤 다시 해 보세요.'
+        : '컨트롤러 신호는 잡혔지만 BC250을 켜지 않았습니다. 펌웨어 문제로 보입니다.',
+      CTRL_MARK_OK: (p) => `[컨트롤러를 켰어요]를 누르고 ${p.after}초 만에 BC250이 켜졌습니다.`,
+      CTRL_MARK_SEEN_ON: () => '컨트롤러 신호가 잡혔습니다. BC250이 켜져 있을 때라 전원은 바꾸지 않았습니다.',
+      PAIR_NO_CLIENT: (p) => `포털이 켜진 지 ${p.dur}초가 지나도 휴대폰이 "BC250 Switch Setup" WiFi에 연결되지 않았습니다. 휴대폰 WiFi 목록에서 연결하고, "인터넷 없음" 경고가 나와도 연결을 유지하세요.`,
+      PAIR_CLIENT_DROPS: (p) => `휴대폰이 포털 WiFi에서 ${p.n}번 끊겼습니다. 인터넷이 없는 WiFi라 휴대폰이 자동으로 다른 네트워크로 옮겨 가는 경우가 많습니다. "연결 유지"를 고르거나 모바일 데이터를 잠시 끄세요. 끊기면 컨트롤러 검색도 멈춥니다.`,
+      PAIR_HOST_NOT_SEEN: (p) => `포털에서 BC250을 켠 지 ${p.dur}초가 지나도 BC250의 연결 시도가 없었습니다. BC250 Steam → 설정 → Bluetooth에서 "BC250 Power Setup"을 선택했는지, 그동안 휴대폰에 "컨트롤러로 깨우기" 화면이 열려 있었는지 확인하세요.`,
+      PAIR_STEP_NOT_SPOOFED: (p) => `[컨트롤러 단계로 계속] 뒤 ESP32가 BC250 주소로 시작하지 못했습니다 (${psReason(p.reason)}). ${p.reason === 'board is on' ? 'BC250을 운영체제에서 완전히 종료한 뒤 다시 하세요.' : 'BC250 주소를 다시 저장한 뒤 시도하세요.'}`,
+      PAIR_PICKER_NO_HOST: () => '[컨트롤러 단계로 계속]을 거치지 않고 컨트롤러 목록을 열었습니다. 이 상태에서는 페어링 모드인 컨트롤러만 나오며, 사용 설명서의 방법(전원만 켜기, PS 버튼만 누르기)으로는 목록에 나오지 않습니다. BC250 주소 저장 후 [컨트롤러 단계로 계속]을 눌러 주세요.',
+      PAIR_SCAN_FAILED: () => '포털에서 블루투스 검색을 시작하지 못했습니다. 계속되면 포털을 종료했다가 다시 들어가 보세요.',
+      PAIR_NOTHING_FOUND: (p) => `컨트롤러 목록 화면이 열린 지 ${p.dur}초 동안 아무 컨트롤러도 나오지 않았습니다. BC250을 끈 상태에서 Xbox는 Xbox 버튼으로 전원만 켜고, PlayStation은 PS 버튼만 누르세요. 컨트롤러를 껐다 켜고 [다시 스캔]도 눌러 보세요.`,
+      PAIR_HID_TIMEOUT: () => '컨트롤러가 연결됐지만 입력 신호가 오지 않아 목록에 넣지 못했습니다. 연결된 뒤 컨트롤러 버튼을 하나 눌러 주세요.',
+      PAIR_NOT_GAMEPAD: (p) => `${p.model} (${p.addr})이 연결됐지만 게임패드가 아니어서 목록에서 뺐습니다.`,
+      PAIR_LE_FAIL: (p) => `BLE 컨트롤러 연결이 오류(${p.status})로 끝났습니다. 컨트롤러를 ESP32 가까이 두고 다시 해 보세요.`,
+      PAIR_NOT_SAVED: (p) => `목록에 컨트롤러 ${p.n}개가 나왔지만 저장하지 않고 포털을 끝냈습니다. 목록에서 항목을 눌러 선택한 뒤 [저장 후 계속]을 눌러야 합니다.`,
+      PAIR_BOUND_ZERO: () => '선택한 컨트롤러 없이 저장해 등록된 컨트롤러가 모두 지워졌습니다.',
+      PAIR_SAVED: (p) => `컨트롤러 ${p.n}개를 저장했습니다. [저장 후 재부팅]으로 포털을 끝내면 적용됩니다.`,
       RESOLVED: p => `감지 전압 이상 상태가 ${p.dur}초 만에 끝났습니다 (${p.by === 'power_off' ? 'PSU 꺼짐' : '전압 정상 복귀'}).`,
       OFF_TRACE: p => `전원 꺼짐(${reasonText(p.reason || '?')}) 전후 감지 전압: 켜져 있을 때 ${mvText(p.before)} → 1초 후 ${mvText(p.s1)}, 5초 후 ${mvText(p.s5)}, 30초 후 ${mvText(p.s30)}. ` + {
         drop: '정상적으로 떨어졌습니다.',
@@ -615,7 +1138,58 @@ const I18N = {
                'boot timed out, board never signalled UP': '부팅 시간 초과', '?': '알 수 없음' },
   },
   en: {
-    subtitle: 'Power log collector',
+    subtitle: 'Diagnostic log collector',
+    view_power: 'Power sense', view_ctrl: 'Controller wake', view_pair: 'Controller setup',
+    view_pair_hint: 'When a controller does not show up in the setup portal, or registering it does not stick: see which step it stopped at.',
+    pstep3: 'With the BC250 off, start portal mode: press the switch or the ESP32 BOOT button until the switch LED blinks fast, then let go. [Power] below shows "setup mode".',
+    pstep4: 'Connect the phone to the "BC250 Switch Setup" WiFi and register at http://192.168.4.1 following the manual. Keep this window open; logging continues across ESP32 restarts.',
+    pstep5: 'If it gets stuck, check [Setup progress] below for how far it got, leave that screen as is for about a minute, then click [Save log] and send the file.',
+    pair_title: 'Setup progress',
+    pair_steps: {
+      setup: 'portal mode started', client: 'phone joined the "BC250 Switch Setup" WiFi',
+      candidate: '"BC250 Power Setup" picked in BC250 Steam (address detected)', host: 'BC250 address saved with [Save this BC250]',
+      step: '[Continue to controller step]', spoofed: 'ESP32 restarted with the BC250 address (controller session)',
+      picker: 'controller list open on the phone', found: 'a controller appeared in the list',
+      bound: 'controllers saved with [Save & continue]', done: 'portal closed with [Save & reboot]',
+    },
+    pair_skipped: 'already saved',
+    st_pmode: 'Portal step', st_phone: 'Phone', st_host: 'BC250 address',
+    pmode_setup: 'setup mode', pmode_host: 'BC250 address', pmode_spoofed: 'controller session', pmode_left: 'portal closed',
+    phone_n: (n) => n ? `${n}` : 'none', host_saved: 'saved', host_candidate: (a) => `seen ${a}`,
+    pdev_title: 'Controllers listed in the portal', pdev_time: 'First seen', pdev_addr: 'Address', pdev_kind: 'Via',
+    pdev_name: 'Name', pdev_rssi: 'Signal', pdev_none: 'No controller listed yet.',
+    pdev_kinds: { ble: 'BLE', classic: 'PS button (Classic)', hid: 'paired connect' },
+    pdev_note: 'The list is only logged by the latest firmware. If the controller screen is open and nothing shows here, update first with [Firmware update] above. Signal is in dBm; below -80 (e.g. -90), bring the controller closer to the ESP32.',
+    view_power_hint: 'When the PSU does not turn off, or turns off late: watch the BC250 sense voltage and each power-off.',
+    view_ctrl_hint: 'When turning on the controller does not start the BC250, or it turns back on by itself: watch the controller signal.',
+    cstep3: 'Turn the BC250 and the controller off and wait one minute. Ready once [Wake] below shows "armed".',
+    cstep4: 'Turn the controller on (Xbox button; on PlayStation the PS button only) and click [Controller is on] right away. The verdict appears under Diagnosis 15 s later.',
+    cstep5: 'If the BC250 started, turn it and the controller off and repeat from step 1 a few times. For a BC250 that turns back on by itself, leave it off for two minutes or more.',
+    st_ble: 'Controller signal', st_arm: 'Wake',
+    ble_present: 'heard', ble_absent: 'none', arm_armed: 'armed', arm_disarmed: 'paused',
+    ctrl_title: 'Controller signal', st_bound: 'Registered', st_ps: 'PlayStation wake',
+    st_adv: 'BLE nearby', st_classic: 'Classic pages',
+    bound_none: 'none', bound_n: (n) => `${n}`, ps_on: 'on', ps_off: 'off', adv_rate: (r) => `${r}/s`,
+    ps_reasons: { 'no saved host': 'BC250 address not set', 'no valid saved host': 'BC250 address not set',
+                  'board is on': 'started with BC250 on', 'setup requested': 'setup mode',
+                  'PS learning with saved host': 'registering controllers', 'board off with saved host': 'normal' },
+    mark_btn: 'Controller is on',
+    mark_pending: (s) => `Judging… ${s} s left`,
+    ctrl_hint: 'Wake only works while the BC250 is off. Right after a power-off, wake pauses until the controller has been quiet for 30 s. BLE nearby counts signals from every device around, and is measured only while the BC250 is off.',
+    cev_title: 'Controller events', cev_time: 'Time', cev_what: 'Event',
+    cev_none: 'No controller events yet.',
+    cev_note: 'Only registered controllers are logged. A controller that is not registered does not show up here even when it is on.',
+    cev: {
+      adv: (p) => `registered controller advertising (BLE) ${p.addr}`,
+      classic: (p) => `registered controller paging (PlayStation/Classic) ${p.addr}`,
+      hid: (p) => `controller connected ${p.model} ${p.addr}`,
+      present: () => 'controller signal heard', lost: () => 'controller signal lost',
+      disarmed: () => 'powered off: wake paused', armed: () => 'controller quiet: wake armed',
+      wake: () => 'BC250 turned on by controller', mark: () => '[Controller is on] clicked',
+      none: () => 'no controller registered',
+      scan: (p) => p.failed ? `scan for ${p.n} controller(s) failed to start (retrying)` : `scanning for ${p.n} controller(s)`,
+      bthost: (p) => `PlayStation wake ${p.spoofed ? 'on' : 'off'} (${psReason(p.reason)})`,
+    },
     unsupported_title: 'This browser is not supported',
     unsupported_body: 'Open this file in Chrome or Edge on a PC. (Firefox, Safari and phones have no USB serial support.)',
     recover_title: 'There is an unsaved log from last time',
@@ -625,6 +1199,11 @@ const I18N = {
     step2: 'Click [Connect], pick the port in the list, then click Connect.',
     step3: 'Keep this window open, power the BC250 on, use it as usual, then shut it down. Repeat until the problem happens.',
     step4: 'Wait at least one minute after shutdown.',
+    conn_title: 'Connect the board',
+    step_fw: 'If [Firmware update] below appears with a yellow outline, install it before following the steps.',
+    fw_legacy: 'older version',
+    fw_notice: 'This board runs older firmware, which does not log everything the diagnosis needs. Click [Install update] before following the steps below. Settings (WiFi, controllers) are kept.',
+    fw_notice_setup: 'The firmware version cannot be read in setup mode. Leave the portal and connect again to check it; update first if it is not the latest.',
     step5: 'Click [Save log] to save a compressed file (.zip), then send it to the developer.',
     saved: (name, kb) => `Saved ${name} (${kb} KB). Send this file to the developer.`,
     chart_title: 'Board sense (TPMS1)', range_2m: '2 min', range_10m: '10 min', range_all: 'All',
@@ -645,7 +1224,14 @@ const I18N = {
     state_ON: 'on', state_OFF: 'off', state_BOOTING: 'booting', state_setup: 'setup mode',
     no_heartbeat: 'Connected, but the board sends nothing. Check that it has firmware on it.',
     err_open: 'Cannot open the port. Make sure no other program (serial monitor) is using it.',
-    err_none: 'No port selected. If the list is empty, check the USB cable (not a charge-only one) and the driver.',
+    err_none: 'No port selected. If the list is empty, install the USB driver (top of this page) and check the USB cable (not a charge-only one).',
+    drv_title: 'First time only: install the USB driver',
+    drv_intro: 'The USB chip on the ESP32 board (CP2102, Silicon Labs) does not get its driver installed automatically. If this is the first time the board is plugged into this PC, install it first with the steps below. Skip this if it is already installed.',
+    drv_step1: 'Open the Silicon Labs driver page:',
+    drv_step2: 'Windows: in the [Downloads] list, download "CP210x Universal Windows Driver" and unzip it. Right-click silabser.inf in the unzipped folder and choose [Install]. (On Windows 11 it is under [Show more options].)',
+    drv_step3: 'macOS: download and install "CP210x VCP Mac OSX Driver", then allow the Silicon Labs extension in [System Settings → Privacy & Security].',
+    drv_step4: 'Unplug and replug the USB cable, reload this page and click [Connect].',
+    drv_step5: 'If the list is still empty: right-click the Start button and open [Device Manager]. An entry like "Silicon Labs CP210x USB to UART Bridge (COM3)" under [Ports (COM & LPT)] means the driver is installed. "CP2102 USB to UART Bridge Controller" with a yellow exclamation mark under [Other devices] means it is still missing; repeat step 2. If no entry appears at all, the cable may be charge-only; try another USB cable.',
     confirm_clear: 'Clear the current log and start over? Anything unsaved is lost.',
     leave_warning: 'There is an unsaved log.',
     fw_title: 'Firmware update', fw_current: 'Installed', fw_latest: 'Latest',
@@ -698,6 +1284,33 @@ const I18N = {
       RESET: p => p.state ? `The ESP32 restarted while the board was ${p.state} (${p.reason}). That hard-cuts the PSU.`
                           : `The ESP32 restarted abnormally (${p.reason}).`,
       SETUP_MODE: () => 'The board started in setup mode.',
+      CTRL_NONE_BOUND: () => 'No controller is registered, so controller wake is off. Register one in setup mode (the setup screen).',
+      CTRL_SCAN_FAILED: (p) => `The Bluetooth scan for ${p.n} controller(s) did not start. If it keeps happening, restart the ESP32.`,
+      CTRL_BT_NOT_READY: () => 'The ESP32 Bluetooth stack stays not ready. Restart the ESP32.',
+      CTRL_NO_ADV: (p) => `Scanning, yet no signal from any device for ${p.dur}s. If there are Bluetooth devices nearby, the ESP32 Bluetooth receiver has a problem.`,
+      CTRL_NEVER_QUIET: (p) => `${p.dur}s after powering off, the controller is still sending, so wake has not re-armed. The controller must be quiet for 30 s before it can wake the BC250 again. Turn the controller off yourself.`,
+      CTRL_PS_BOARD_ON: () => 'The ESP32 started while the BC250 was on, so PlayStation controller wake is off. Restart the ESP32 (RST button) while the BC250 is off to enable it. BLE controllers such as Xbox are not affected.',
+      CTRL_MARK_NOT_SEEN: (p) => p.on
+        ? '[Controller is on] was clicked while the BC250 was on, when the controller signal is not looked for. Turn the BC250 off and try again.'
+        : 'No registered controller was heard within 15 s of [Controller is on]. Check that the controller is registered and not connected to another device (PC, phone).',
+      CTRL_MARK_NO_WAKE: (p) => p.armed === false
+        ? 'The controller was heard, but wake was paused after a recent power-off, so the BC250 stayed off. Try again once [Wake] shows "armed".'
+        : 'The controller was heard but the BC250 was not turned on. Looks like a firmware problem.',
+      CTRL_MARK_OK: (p) => `The BC250 turned on ${p.after}s after [Controller is on].`,
+      CTRL_MARK_SEEN_ON: () => 'The controller was heard. The BC250 was already on, so power was left as is.',
+      PAIR_NO_CLIENT: (p) => `The portal has been up ${p.dur}s and no phone has joined the "BC250 Switch Setup" WiFi. Join it from the phone's WiFi list and stay connected even when it warns about no internet.`,
+      PAIR_CLIENT_DROPS: (p) => `The phone left the portal WiFi ${p.n} times. Phones often switch away from a WiFi without internet; choose "stay connected" or turn mobile data off for a while. The controller scan stops whenever it drops.`,
+      PAIR_HOST_NOT_SEEN: (p) => `${p.dur}s after powering the BC250 from the portal, it has not tried to connect. Check that "BC250 Power Setup" was picked in BC250 Steam → Settings → Bluetooth, with the "Controller wake" screen open on the phone meanwhile.`,
+      PAIR_STEP_NOT_SPOOFED: (p) => `After [Continue to controller step] the ESP32 did not start with the BC250 address (${psReason(p.reason)}). ${p.reason === 'board is on' ? 'Shut the BC250 down completely from its OS and try again.' : 'Save the BC250 address again and retry.'}`,
+      PAIR_PICKER_NO_HOST: () => 'The controller list was opened without [Continue to controller step]. There only controllers in pairing mode appear; turning one on or pressing the PS button (as the manual says) does not list it. Save the BC250 address, then click [Continue to controller step].',
+      PAIR_SCAN_FAILED: () => 'The portal could not start the Bluetooth scan. If it keeps happening, leave the portal and enter it again.',
+      PAIR_NOTHING_FOUND: (p) => `No controller appeared in ${p.dur}s with the controller list open. With the BC250 off, turn an Xbox controller on with its Xbox button; on PlayStation press the PS button only. Also try turning the controller off and on, and [Scan again].`,
+      PAIR_HID_TIMEOUT: () => 'A controller connected but sent no input, so it was not listed. Press a button on it once it connects.',
+      PAIR_NOT_GAMEPAD: (p) => `${p.model} (${p.addr}) connected but is not a gamepad, so it was left out.`,
+      PAIR_LE_FAIL: (p) => `A BLE controller connection ended with an error (${p.status}). Bring the controller close to the ESP32 and try again.`,
+      PAIR_NOT_SAVED: (p) => `${p.n} controller(s) were listed but the portal was closed without saving. Tap an entry to select it, then click [Save & continue].`,
+      PAIR_BOUND_ZERO: () => 'Saved with no controller selected, which removed every registered controller.',
+      PAIR_SAVED: (p) => `Saved ${p.n} controller(s). They apply once the portal is closed with [Save & reboot].`,
       RESOLVED: p => `The sense anomaly ended after ${p.dur}s (${p.by === 'power_off' ? 'PSU turned off' : 'sense recovered'}).`,
       OFF_TRACE: p => `Board sense around a power-off (${reasonText(p.reason || '?')}): ${mvText(p.before)} while on -> ${mvText(p.s1)} after 1 s, ${mvText(p.s5)} after 5 s, ${mvText(p.s30)} after 30 s. ` + {
         drop: 'It dropped as expected.',
@@ -717,7 +1330,31 @@ let lang = 'ko';
 const T = (k) => I18N[lang][k];
 const reasonText = (r) => I18N[lang].reasons[r] || r;
 const mvText = (v) => (v === null || v === undefined ? '-' : `${v}mV`);
+const psReason = (r) => I18N[lang].ps_reasons[r] || r;
 const $ = (id) => document.getElementById(id);
+
+// The views a finding shows in.
+const VIEWS = ['power', 'ctrl', 'pair'];
+const FINDING_VIEWS = (code) =>
+  ['RESET', 'SETUP_MODE', 'REWAKE'].includes(code) ? VIEWS
+  : ['CTRL_NO_ADV', 'CTRL_BT_NOT_READY'].includes(code) ? ['ctrl', 'pair']
+  : code.startsWith('CTRL_') ? ['ctrl'] : code.startsWith('PAIR_') ? ['pair'] : ['power'];
+let view = 'power';
+const inView = (f, v = view) => FINDING_VIEWS(f.code).includes(v);
+
+function setView(next) {
+  view = VIEWS.includes(next) ? next : 'power';
+  document.body.dataset.view = view;
+  for (const btn of $('views').querySelectorAll('button')) {
+    btn.classList.toggle('on', btn.dataset.view === view);
+    btn.setAttribute('aria-selected', btn.dataset.view === view);
+  }
+  try { localStorage.setItem('bc250_view', view); } catch (e) { /* ignore */ }
+  try { history.replaceState(null, '', '#' + view); } catch (e) { /* file:// in some browsers */ }
+  renderFindings();
+  renderStatus();
+  renderChart();
+}
 
 // USB-UART bridges on ESP32 devkits, plus Espressif's native USB (C3).
 const ESP_FILTERS = [0x10c4, 0x1a86, 0x0403, 0x303a].map((v) => ({ usbVendorId: v }));
@@ -747,15 +1384,26 @@ function findingText(f) { return I18N[lang].f[f.code](f.params); }
 
 function renderFindings() {
   renderTraces();
+  renderCtrlEvents(true);
+  renderPair();
+  // Each tab carries the warning count of its view, so a problem in the other
+  // view is not missed.
+  for (const btn of $('views').querySelectorAll('button')) {
+    const n = analyzer.findings.filter((f) => f.severity === 'warn' && inView(f, btn.dataset.view)).length;
+    const badge = btn.querySelector('.badge');
+    badge.textContent = n;
+    badge.classList.toggle('hidden', n === 0);
+  }
   const box = $('findings');
   box.textContent = '';
-  if (!analyzer.findings.some((f) => f.severity === 'warn')) {
+  const shown = analyzer.findings.filter((f) => inView(f));
+  if (!shown.some((f) => f.severity === 'warn')) {
     const d = document.createElement('div');
     d.className = 'none';
     d.textContent = T('findings_none');
     box.appendChild(d);
   }
-  for (const f of analyzer.findings) {
+  for (const f of shown) {
     const d = document.createElement('div');
     d.className = 'finding' + (f.severity === 'info' ? ' info' : '');
     const c = document.createElement('div');
@@ -791,7 +1439,106 @@ function renderStatus() {
   setStat('st-time', startedAt ? fmtElapsed((performance.now() - t0) / 1000) : '-', 'idle');
   $('disconnect-btn').disabled = !port;
   $('save-btn').disabled = lines.length === 0;
+  renderCtrl(live);
+  renderPair();
   renderFw();
+}
+
+// Registration checklist: each step done (with its time), skipped (already
+// saved earlier), the next one to do, or still ahead.
+function renderPair() {
+  const p = analyzer.pair;
+  const box = $('pair-steps');
+  box.textContent = '';
+  const skip = new Set();
+  if (p.hostSavedAtStart) { skip.add('candidate'); skip.add('host'); }
+  if (p.hostSavedAtStart && p.steps.spoofed !== undefined && p.steps.step === undefined) skip.add('step');
+  let next = PAIR_STEPS.find((k) => p.steps[k] === undefined && !skip.has(k));
+  for (const k of PAIR_STEPS) {
+    const li = document.createElement('li');
+    const done = p.steps[k] !== undefined, skipped = !done && skip.has(k);
+    li.className = done ? 'done' : skipped ? 'skip' : k === next && p.steps.setup !== undefined ? 'now' : '';
+    const mk = document.createElement('span');
+    mk.className = 'mk';
+    mk.textContent = done ? '✓' : skipped ? '–' : li.className === 'now' ? '▶' : '·';
+    const tx = document.createElement('span');
+    tx.className = 'tx';
+    tx.textContent = T('pair_steps')[k] + (skipped ? ` (${T('pair_skipped')})` : '');
+    const at = document.createElement('span');
+    at.className = 'at';
+    at.textContent = done ? clockAt(p.steps[k]) : '';
+    li.append(mk, tx, at);
+    box.appendChild(li);
+  }
+
+  const s = p.session;
+  setStat('st-pmode', !p.inSetup ? (p.steps.setup !== undefined ? T('pmode_left') : '-')
+          : p.spoofed ? T('pmode_spoofed') : p.spoofed === false ? T('pmode_host') : T('pmode_setup'),
+          p.inSetup ? 'ok' : 'idle');
+  setStat('st-phone', p.inSetup && s.clients !== undefined ? T('phone_n')(s.clients) : '-',
+          p.inSetup ? (s.clients > 0 ? 'ok' : 'bad') : 'idle');
+  setStat('st-host', p.hostAddr || (p.hostSavedAtStart ? T('host_saved') : p.candidate ? T('host_candidate')(p.candidate) : '-'),
+          p.hostAddr || p.hostSavedAtStart ? 'ok' : 'idle');
+  const r = analyzer.ctrl.advRate;
+  setStat('st-padv', r === null ? '-' : T('adv_rate')(r.toFixed(1)), r === 0 ? 'bad' : 'idle');
+
+  const body = $('pair-devices');
+  body.textContent = '';
+  $('pair-devices-none').classList.toggle('hidden', p.devices.length > 0);
+  for (const d of p.devices) {
+    const tr = document.createElement('tr');
+    for (const [text, cls] of [[clockAt(d.t)], [d.addr], [T('pdev_kinds')[d.transport] || d.transport],
+                               [d.name || '-'], [d.rssi === null ? '-' : String(d.rssi), 'n']]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (cls) td.className = cls;
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+}
+
+function renderCtrl(live) {
+  const c = analyzer.ctrl;
+  setStat('st-ble', c.present === null ? '-' : T(c.present ? 'ble_present' : 'ble_absent'),
+          c.present ? 'ok' : 'idle');
+  setStat('st-arm', c.armed === null ? '-' : T(c.armed ? 'arm_armed' : 'arm_disarmed'),
+          c.armed ? 'ok' : 'idle');
+  setStat('st-bound', c.bound === null ? '-' : c.bound === 0 ? T('bound_none') : T('bound_n')(c.bound),
+          c.bound === 0 ? 'bad' : 'idle');
+  const h = c.bthost;
+  setStat('st-ps', h ? (h.spoofed ? T('ps_on') : `${T('ps_off')} · ${psReason(h.reason)}`) : '-',
+          h ? (h.spoofed ? 'ok' : h.reason === 'board is on' ? 'bad' : 'idle') : 'idle');
+  setStat('st-adv', c.advRate === null ? '-' : T('adv_rate')(c.advRate.toFixed(1)),
+          c.advRate === 0 ? 'bad' : 'idle');
+  setStat('st-classic', c.classicReq === null ? '-' : String(c.classicReq), 'idle');
+  $('mark-btn').disabled = !live || !!c.mark;
+  $('mark-msg').textContent = c.mark && live
+    ? T('mark_pending')(Math.max(0, Math.ceil(MARK_S - ((performance.now() - t0) / 1000 - c.mark.t))))
+    : '';
+  renderCtrlEvents(false);
+}
+
+let ctrlEventsShown = -1;
+function renderCtrlEvents(force) {
+  const events = analyzer.ctrl.events;
+  if (!force && events.length === ctrlEventsShown && events.length < CTRL_EVENTS_MAX) return;
+  ctrlEventsShown = events.length;
+  const body = $('ctrl-events');
+  body.textContent = '';
+  $('ctrl-events-none').classList.toggle('hidden', events.length > 0);
+  for (const ev of events.slice(-200).reverse()) {
+    const tr = document.createElement('tr');
+    const time = document.createElement('td');
+    time.textContent = clockAt(ev.t);
+    const what = document.createElement('td');
+    what.textContent = T('cev')[ev.kind](ev.params);
+    if (ev.kind === 'wake' || ev.kind === 'armed') what.className = 'ok';
+    if (ev.kind === 'none' || (ev.kind === 'scan' && ev.params.failed) ||
+        (ev.kind === 'bthost' && ev.params.reason === 'board is on')) what.className = 'warn';
+    tr.append(time, what);
+    body.appendChild(tr);
+  }
 }
 
 function pad(n, w = 2) { return String(n).padStart(w, '0'); }
@@ -845,6 +1592,7 @@ function buildFile(text, an) {
   const head = [
     '# BC250 power log',
     `# saved: ${stamp(new Date())}`,
+    `# view: ${view}`,
     `# browser: ${navigator.userAgent}`,
     `# thresholds: SENSE_LOW_MV=${an.lowMv} SENSE_HIGH_MV=${an.highMv}`,
     `# heartbeats: ${an.heartbeats}`,
@@ -927,7 +1675,7 @@ async function readZipText(buf) {
 
 async function saveLog(text, an) {
   const d = new Date();
-  const base = `bc250-power-log-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+  const base = `bc250-${{ ctrl: 'controller', pair: 'pairing' }[view] || 'power'}-log-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
                `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   const blob = await makeZip(base + '.txt', buildFile(text, an));
   const a = document.createElement('a');
@@ -968,6 +1716,7 @@ function nowT() {
 }
 
 function renderChart() {
+  if (view !== 'power') return;   // hidden: nothing to measure the width against
   const svg = $('chart');
   const W = Math.max(280, $('chart-wrap').clientWidth);
   svg.setAttribute('viewBox', `0 0 ${W} ${CHART_H}`);
@@ -1134,6 +1883,8 @@ async function openPort(p, quiet = false) {
   keepReading = true;
   connectedAt = performance.now();
   fwCurrent = null;
+  fwNoticeShown = false;
+  fwHbAtConnect = analyzer.heartbeats;
   record(`[diag] connected ${describe(p)}`);
   renderStatus();
   readDone = readLoop(p);
@@ -1199,6 +1950,7 @@ const UPDATE_BASE = (() => {
 const ESPTOOL_JS = 'esptool-js-0.5.4.mjs';
 const FW_RE = /(?:^\[INIT\] |\| )fw=(\S+)/;
 let manifest = null, fwCurrent = null, fwResult = null;
+let fwNoticeShown = false, fwHbAtConnect = 0;   // per connection
 // Install flow. Many ESP32 devkits cannot be reset into the bootloader over
 // USB, so the person does it by hand (BOOT held, EN tapped) and the page reads
 // the serial log to tell them how it went:
@@ -1285,10 +2037,35 @@ function setAlert(on) {
   }
 }
 
+// Whether the connected board should be updated before following the steps:
+// a release older than the site's, or firmware from before versions were
+// logged (heartbeats without fw=). Developer builds ("dev") are left alone.
+const RELEASE_RE = /^\d{4}\.\d\d\.\d\d-\d{4}$/;
+function fwLegacy() { return !fwCurrent && analyzer.heartbeats - fwHbAtConnect >= 3; }
+function fwOutdated() {
+  if (!manifest || !port || !keepReading) return false;
+  return fwLegacy() || (!!fwCurrent && RELEASE_RE.test(fwCurrent) && fwCurrent < manifest.version);
+}
+
 function renderFw() {
   if (!manifest) return;
-  setStat('fw-current', fwCurrent || (port && keepReading ? T('fw_unknown') : '-'), 'idle');
+  const live = !!port && keepReading;
+  setStat('fw-current', fwCurrent || (fwLegacy() ? T('fw_legacy') : live ? T('fw_unknown') : '-'),
+          fwOutdated() ? 'bad' : 'idle');
   setStat('fw-latest', manifest.version, fwCurrent && fwCurrent !== manifest.version ? 'ok' : 'idle');
+  // Point at the update before anything else: it is the first thing to do.
+  const outdated = fwOutdated() && fwPhase === 'idle';
+  const card = $('fw-card');
+  card.classList.toggle('attention', outdated);
+  const notice = $('fw-notice');
+  const unknownSetup = live && !fwCurrent && analyzer.setupMode && !fwLegacy();
+  notice.textContent = outdated ? T('fw_notice') : unknownSetup ? T('fw_notice_setup') : '';
+  notice.classList.toggle('hidden', !outdated && !unknownSetup);
+  if (outdated && !fwNoticeShown) {
+    fwNoticeShown = true;
+    const box = card.getBoundingClientRect();
+    if (box.top < 0 || box.bottom > window.innerHeight) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
   const idle = fwPhase === 'idle';
   const blocker = fwBlocker();
   $('fw-override-row').classList.toggle('hidden', !idle || !port || !keepReading || hbFresh());
@@ -1519,8 +2296,11 @@ async function requestPort(filtered) {
     const p = await navigator.serial.requestPort(filtered ? { filters: ESP_FILTERS } : {});
     await openPort(p);
   } catch (e) {
-    if (e.name === 'NotFoundError') $('conn-error').textContent = T('err_none');
-    else $('conn-error').textContent = e.message;
+    if (e.name === 'NotFoundError') {
+      $('conn-error').textContent = T('err_none');
+      $('driver').open = true;
+      $('driver').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else $('conn-error').textContent = e.message;
   }
 }
 
@@ -1549,6 +2329,17 @@ function init() {
   applyLang(saved || ((navigator.language || '').startsWith('ko') ? 'ko' : 'en'));
   $('lang-en').onclick = () => applyLang('en');
   $('lang-ko').onclick = () => applyLang('ko');
+  // A link ending in #ctrl or #power opens that view; otherwise the last one used.
+  let savedView = null;
+  try { savedView = localStorage.getItem('bc250_view'); } catch (e) { /* ignore */ }
+  const hashView = location.hash.slice(1);
+  setView(VIEWS.includes(hashView) ? hashView : savedView);
+  for (const btn of $('views').querySelectorAll('button')) btn.onclick = () => setView(btn.dataset.view);
+  window.addEventListener('hashchange', () => {
+    const v = location.hash.slice(1);
+    if (VIEWS.includes(v) && v !== view) setView(v);
+  });
+  $('mark-btn').onclick = () => { record('[diag] mark: controller on'); renderStatus(); };
 
   let previous = null;
   try { previous = localStorage.getItem(STORE_KEY); } catch (e) { /* ignore */ }
@@ -1626,6 +2417,8 @@ function init() {
   navigator.serial.getPorts().then((ports) => { if (ports.length === 1) openPort(ports[0]); });
 
   setInterval(() => {
+    // The portal is silent while it waits for a phone; keep its timers going.
+    if (keepReading && startedAt && analyzer.tick((performance.now() - t0) / 1000).length) renderFindings();
     renderStatus();
     // Hold the picture still while the person is reading a tooltip.
     if ($('chart-tip').classList.contains('hidden')) renderChart();
