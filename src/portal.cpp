@@ -28,6 +28,7 @@ struct BleDev {
   bool used;
   uint32_t lastSeen;
   bool classic;
+  bool logged;   // reported on serial; cleared again when a name arrives
 };
 static const int       MAX_DEVS = 48;
 static BleDev          devs[MAX_DEVS];
@@ -95,15 +96,38 @@ static void setupControllerFound(const char *addr, const char *name, int rssi,
     devs[idx].addr[sizeof(devs[idx].addr) - 1] = 0;
     devs[idx].name[0] = 0;
     devs[idx].lastSeen = 0;
+    devs[idx].logged = false;
   }
   if (rssi != -127 || !devs[idx].lastSeen) devs[idx].rssi = rssi;
   devs[idx].classic = classic;
   devs[idx].lastSeen = now;
-  if (name[0]) {
+  if (name[0] && strncmp(devs[idx].name, name, sizeof(devs[idx].name) - 1) != 0) {
     strncpy(devs[idx].name, name, sizeof(devs[idx].name) - 1);
     devs[idx].name[sizeof(devs[idx].name) - 1] = 0;
+    devs[idx].logged = false;
   }
   portEXIT_CRITICAL(&devsMux);
+}
+
+// Reports picker entries on serial, for the power-log page's registration view.
+// The callback above runs on the Bluetooth task under a spinlock, so printing
+// happens here on the Arduino task. A device is reported when it enters the
+// list and again when its name changes.
+static void logNewBleDevices() {
+  BleDev fresh[4];
+  int n = 0;
+  portENTER_CRITICAL(&devsMux);
+  for (auto &dev : devs) {
+    if (!dev.used || dev.logged) continue;
+    dev.logged = true;
+    fresh[n++] = dev;
+    if (n == 4) break;
+  }
+  portEXIT_CRITICAL(&devsMux);
+  for (int i = 0; i < n; ++i)
+    Serial.printf("[PORTAL] device %s %s rssi=%d name=%s\n", fresh[i].addr,
+                  fresh[i].classic ? "classic" : "ble", fresh[i].rssi,
+                  fresh[i].name[0] ? fresh[i].name : "-");
 }
 
 // --- Helpers ---
@@ -405,6 +429,7 @@ static void servicePortalBleScan() {
     return;
   }
   if (bleScanRequested) controllerScanLoop();
+  logNewBleDevices();
   bool running = controllerScanRunning();
   portENTER_CRITICAL(&devsMux);
   bleScannerRunning = running;
@@ -666,6 +691,14 @@ static void servicePortalHost() {
       uint32_t(now - g_hostLearnLastRequest) < HOST_LEARN_IDLE_MS;
   portEXIT_CRITICAL(&hostMux);
   learnActive = learnActive && WiFi.softAPgetStationNum() > 0;
+  // Report each new BC250 candidate (a Classic connection attempt while the
+  // host screen is learning) so a missing "BC250 Power Setup" pick shows in the log.
+  static char lastLearned[18];
+  char learned[18];
+  if (btHostLearnedAddr(learned) && strcmp(learned, lastLearned) != 0) {
+    memcpy(lastLearned, learned, sizeof(lastLearned));
+    Serial.printf("[PORTAL] BC250 candidate seen: %s\n", learned);
+  }
   if (g_psSession) {
     // Spoofed session: answer PS-button pages only while the BC250 is down.
     btHostSetLearning(false);

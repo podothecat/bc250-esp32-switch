@@ -109,12 +109,17 @@ static void requestDiscovery(bool enabled) {
   enqueueBtCommand(discoveryCommand, -1, enabled);
 }
 static void reportController(ControllerPtr controller) {
-  if (!controller->isGamepad()) { releaseController(controller); return; }
   auto properties = controller->getProperties();
   char addr[18];
   snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
            properties.btaddr[0], properties.btaddr[1], properties.btaddr[2],
            properties.btaddr[3], properties.btaddr[4], properties.btaddr[5]);
+  if (!controller->isGamepad()) {
+    Serial.printf("[HID] connected %s (%s) is not a gamepad; disconnecting\n", addr,
+                  controller->getModelName().c_str());
+    releaseController(controller);
+    return;
+  }
   Serial.printf("[HID] connected %s (%s), disconnecting\n", addr, controller->getModelName().c_str());
   if (wanted && found) found(addr, controller->getModelName().c_str(), -127, true);
   releaseController(controller);
